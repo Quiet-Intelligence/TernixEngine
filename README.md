@@ -53,17 +53,7 @@ The core idea is to reduce standard high-precision weights down to simple intege
 
 ## 4. System Architecture
 
-```mermaid
-graph TD
-    A[PyBind11 Interface] --> B[Model Loader & Memory Aligner]
-    B --> C{Execution Backend}
-    C -->|CPU| D[AVX2 In-Register Compute]
-    C -->|GPU| E[CUDA Warp Reduction]
-    D --> F[L0/L1 Cache]
-    E --> G[Shared Memory Tiles]
-    F --> H(Output INT32 Tensor)
-    G --> H
-```
+![TernixEngine Architecture](TernixEngine-Architecture.png)
 The system initializes via a Python wrapper or C++ CLI. The `Model` struct parses interleaved weights from disk, aligning them in 32-byte chunks using `_mm_malloc` for SIMD compatibility. The kernel execution branches to either the highly optimized CPU AVX2 loop or the asynchronous CUDA kernel based on runtime topology.
 
 ## 5. Directory Structure
