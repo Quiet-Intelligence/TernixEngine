@@ -16,7 +16,7 @@ endif()
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
-    set(CMAKE_CUDA_STANDARD 20)
+    set(CMAKE_CUDA_STANDARD 17)  # device code needs no C++20; older CMake lacks the CUDA20 dialect
     set(TERNIX_HAS_CUDA ON)
     message(STATUS "CUDA compiler found. Enabling GPU support.")
 else()
