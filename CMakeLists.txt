@@ -72,6 +72,7 @@ if(TERNIX_HAS_CUDA)
 endif()
 
 add_library(ternix_core STATIC ${TERNIX_SOURCES})
+set_target_properties(ternix_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(TERNIX_HAS_CUDA)
     target_compile_definitions(ternix_core PUBLIC TERNIX_HAS_CUDA=1)
 endif()
