@@ -1,2 +1,0 @@
-C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build/CMakeFiles/CheckCUDA/CMakeFiles/edit_cache.dir
-C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build/CMakeFiles/CheckCUDA/CMakeFiles/rebuild_cache.dir

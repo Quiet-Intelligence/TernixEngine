@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build/_deps/pybind11-subbuild/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

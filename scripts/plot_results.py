@@ -1,84 +1,160 @@
-import json
-import matplotlib.pyplot as plt
+"""Turn raw benchmark JSON into charts and README tables.
+
+Inputs
+  benchmarks/results.json       Google Benchmark output of bench_simd_math (CPU)
+  benchmarks/results_cuda.json  written by `bench_cuda <path>` (GPU, optional)
+Outputs
+  benchmarks/benchmark_results.png   CPU: effective throughput per kernel and problem size
+  benchmarks/benchmark_cuda.png      GPU: naive vs cp.async-tiled kernel (if the JSON exists)
+  README.md                          tables between <!-- BENCH_CPU_START/END --> and <!-- BENCH_GPU_START/END -->
+"""
 import argparse
+import json
 import os
 import re
+from collections import defaultdict
 
-def plot_and_update(json_path, output_dir, readme_path):
-    if not os.path.exists(json_path):
-        print(f"Error: {json_path} not found.")
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+
+CPU_IMPLS = [
+    ("BM_NaiveTernary", "Naive (i-j-k, branching decode)"),
+    ("BM_ScalarTernary", "Scalar (i-k-j, branch-free decode)"),
+    ("BM_AVX2Ternary", "AVX2, one row at a time"),
+    ("BM_AVX2BlockedTernary", "AVX2, 4-row register blocking"),
+]
+COLORS = ["#adb5bd", "#74c0fc", "#4c6ef5", "#1b3a8a"]
+
+
+def load_cpu(path):
+    """-> {impl_prefix: {size: median_cpu_ms}} (uses the median aggregate if repetitions were run)."""
+    with open(path) as f:
+        data = json.load(f)
+    table = defaultdict(dict)
+    for b in data["benchmarks"]:
+        if b.get("run_type") == "aggregate" and b.get("aggregate_name") != "median":
+            continue
+        m = re.match(r"(BM_\w+?)(?:/(\d+))?(?:_median)?$", b["name"])
+        if not m or m.group(2) is None:
+            continue
+        unit = {"ns": 1e-6, "us": 1e-3, "ms": 1.0, "s": 1e3}[b["time_unit"]]
+        table[m.group(1)][int(m.group(2))] = b["cpu_time"] * unit
+    return table, data.get("context", {})
+
+
+def gops(size, ms):
+    return 2.0 * size**3 / (ms * 1e-3) / 1e9
+
+
+def plot_cpu(table, out_png):
+    sizes = sorted({s for impl in table.values() for s in impl})
+    fig, ax = plt.subplots(figsize=(9, 5))
+    width = 0.2
+    for i, (key, label) in enumerate(CPU_IMPLS):
+        vals = [gops(s, table[key][s]) if s in table.get(key, {}) else 0 for s in sizes]
+        xs = [j + (i - 1.5) * width for j in range(len(sizes))]
+        bars = ax.bar(xs, vals, width, label=label, color=COLORS[i])
+        for bar, v in zip(bars, vals):
+            if v:
+                ax.text(bar.get_x() + bar.get_width() / 2, v, f"{v:.1f}", ha="center", va="bottom", fontsize=8)
+    ax.set_xticks(range(len(sizes)))
+    ax.set_xticklabels([f"{s}³" for s in sizes])
+    ax.set_xlabel("Square problem size (M = K = N)")
+    ax.set_ylabel("Effective throughput (G ternary-MAC ops/s, 2 ops per MAC)")
+    ax.set_title("Ternary GEMM on one CPU thread (int8 activations, 2-bit weights)")
+    ax.legend(frameon=False, fontsize=8)
+    ax.grid(axis="y", alpha=0.25)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+
+def plot_gpu(gpu, out_png):
+    rows = gpu["results"]
+    ns = [r["n"] for r in rows]
+    fig, ax = plt.subplots(figsize=(8, 4.6))
+    xs = range(len(ns))
+    ax.bar([x - 0.2 for x in xs], [r["naive_ms"] for r in rows], 0.4, label="naive (1 thread / output)", color="#adb5bd")
+    ax.bar([x + 0.2 for x in xs], [r["tiled_ms"] for r in rows], 0.4, label="tiled, cp.async double buffer", color="#4c6ef5")
+    for x, r in zip(xs, rows):
+        ax.text(x + 0.2, r["tiled_ms"], f'{r["naive_ms"] / r["tiled_ms"]:.1f}×', ha="center", va="bottom", fontsize=9)
+    ax.set_yscale("log")
+    ax.set_xticks(list(xs))
+    ax.set_xticklabels([f"{n}³" for n in ns])
+    ax.set_ylabel("Kernel time (ms, log scale)")
+    ax.set_title(f"Ternary GEMM kernels on {gpu['device']}")
+    ax.legend(frameon=False)
+    ax.grid(axis="y", alpha=0.25)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+
+def cpu_markdown(table, ctx):
+    sizes = sorted({s for impl in table.values() for s in impl})
+    big = sizes[-1]
+    base = table["BM_NaiveTernary"][big]
+    lines = [
+        f"CPU: {ctx.get('num_cpus', '?')} logical cores, one thread, release build. "
+        "Seeded random int8 activations and random ternary weights (identical for every kernel).",
+        "",
+        "| Kernel | " + " | ".join(f"{s}³ ms" for s in sizes) + f" | G ops/s @ {big}³ | vs naive @ {big}³ |",
+        "|---|" + "---:|" * (len(sizes) + 2),
+    ]
+    for key, label in CPU_IMPLS:
+        if key not in table:
+            continue
+        t = table[key]
+        cells = " | ".join(f"{t[s]:.2f}" if s in t else "-" for s in sizes)
+        lines.append(f"| {label} | {cells} | {gops(big, t[big]):.2f} | {base / t[big]:.1f}× |")
+    return "\n".join(lines)
+
+
+def gpu_markdown(gpu):
+    lines = [
+        f"GPU: {gpu['device']} (sm_{gpu['sm']}). CUDA-event kernel time, data resident on device, median of 31 launches; "
+        "every result is checked bit-for-bit against the CPU kernel.",
+        "",
+        "| Size | naive ms | tiled (cp.async) ms | speed-up | tiled effective TOPS |",
+        "|---:|---:|---:|---:|---:|",
+    ]
+    for r in gpu["results"]:
+        lines.append(f"| {r['n']}³ | {r['naive_ms']:.3f} | {r['tiled_ms']:.3f} | {r['naive_ms'] / r['tiled_ms']:.1f}× | {r['tiled_tops']:.2f} |")
+    return "\n".join(lines)
+
+
+def inject(readme_path, tag, body):
+    start, end = f"<!-- {tag}_START -->", f"<!-- {tag}_END -->"
+    with open(readme_path, encoding="utf-8") as f:
+        text = f.read()
+    if start not in text:
+        print(f"marker {start} not found in {readme_path}; skipping")
         return
-        
-    try:
-        with open(json_path, 'r') as f:
-            data = json.load(f)
-            
-        benchmarks = data.get('benchmarks', [])
-        if not benchmarks:
-            print("No benchmark data found.")
-            return
-            
-        names = []
-        cpu_times = []
-        naive_time = None
-        avx2_time = None
-        
-        for b in benchmarks:
-            name = b['name'].replace('BM_', '')
-            time = b['cpu_time']
-            names.append(name)
-            cpu_times.append(time)
-            if 'NaiveTernary' in name:
-                naive_time = time
-            elif 'AVX2Ternary' in name:
-                avx2_time = time
-                
-        # Plotting
-        plt.style.use('dark_background')
-        plt.figure(figsize=(10, 6))
-        bars = plt.bar(names, cpu_times, color='#00ff9d')
-        plt.ylabel(f"CPU Time ({benchmarks[0]['time_unit']})", fontweight='bold')
-        plt.title('TernixEngine AVX2 SIMD Microbenchmark Results', fontweight='bold', pad=20)
-        plt.xticks(rotation=15)
-        plt.grid(axis='y', alpha=0.2)
-        
-        for bar in bars:
-            yval = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2, yval + (yval * 0.02), f"{yval:.2f}", ha='center', va='bottom')
-            
-        plt.tight_layout()
-        out_file = os.path.join(output_dir, 'benchmark_results.png')
-        # Overwrite existing
-        plt.savefig(out_file, dpi=300)
-        print(f"Graph successfully saved/overwritten to {out_file}")
-        
-        # Update README
-        if naive_time and avx2_time and os.path.exists(readme_path):
-            speedup = naive_time / avx2_time
-            with open(readme_path, 'r') as f:
-                content = f.read()
-                
-            # Regex to replace table rows dynamically
-            naive_pattern = r"\|\s*Naive Scalar\s*\|[^|]+\|[^|]+\|[^|]+\|[^|]+\|"
-            avx2_pattern = r"\|\s*Tiled SIMD Accumulation\s*\|[^|]+\|[^|]+\|[^|]+\|[^|]+\|"
-            
-            new_naive = f"| Naive Scalar | Branching `if (w == 0)` | Base C++ | 1.0x (Baseline) | {naive_time:.2f} ms |"
-            new_avx2 = f"| Tiled SIMD Accumulation | Tiled `M -> K -> N` | AVX2 (`_mm256_srlv_epi32`) | ~{speedup:.1f}x | {avx2_time:.2f} ms |"
-            
-            content = re.sub(naive_pattern, new_naive, content)
-            content = re.sub(avx2_pattern, new_avx2, content)
-            
-            with open(readme_path, 'w') as f:
-                f.write(content)
-            print("README.md dynamically updated with actual empirical metrics!")
-            
-    except Exception as e:
-        print(f"Failed to process: {e}")
+    text = re.sub(re.escape(start) + r".*?" + re.escape(end), lambda _: f"{start}\n{body}\n{end}", text, flags=re.S)
+    with open(readme_path, "w", encoding="utf-8") as f:
+        f.write(text)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default="benchmarks/results.json")
-    parser.add_argument("--output", default="benchmarks")
-    parser.add_argument("--readme", default="README.md")
-    args = parser.parse_args()
-    plot_and_update(args.input, args.output, args.readme)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--input", default="benchmarks/results.json")
+    ap.add_argument("--cuda-input", default="benchmarks/results_cuda.json")
+    ap.add_argument("--output", default="benchmarks")
+    ap.add_argument("--readme", default="README.md")
+    a = ap.parse_args()
+
+    table, ctx = load_cpu(a.input)
+    plot_cpu(table, os.path.join(a.output, "benchmark_results.png"))
+    inject(a.readme, "BENCH_CPU", cpu_markdown(table, ctx))
+    print("CPU chart and README table updated")
+
+    if os.path.exists(a.cuda_input):
+        with open(a.cuda_input) as f:
+            gpu = json.load(f)
+        plot_gpu(gpu, os.path.join(a.output, "benchmark_cuda.png"))
+        inject(a.readme, "BENCH_GPU", gpu_markdown(gpu))
+        print("GPU chart and README table updated")

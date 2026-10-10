@@ -1,208 +1,165 @@
 # TernixEngine
-**1.58-bit SIMD-Native Inference Engine**
-*Disclaimer: This project is distributed under the Elastic License 2.0. Please see the [License](#12-license) section for more details.*
+**1.58-bit ternary GEMM kernels for CPU (AVX2) and GPU (CUDA), with a NumPy-friendly Python API**
+*Distributed under the Elastic License 2.0 (see [License](#12-license)).*
 
-![C++20](https://img.shields.io/badge/C%2B%2B-20-blue) ![CUDA](https://img.shields.io/badge/CUDA-12.x-green) ![AVX2](https://img.shields.io/badge/SIMD-AVX2-orange) ![Python](https://img.shields.io/badge/Python-PyBind11-yellow)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-blue) ![CUDA](https://img.shields.io/badge/CUDA-sm__80%2B-green) ![AVX2](https://img.shields.io/badge/SIMD-AVX2-orange) ![Python](https://img.shields.io/badge/Python-PyBind11-yellow)
 
 ## Abstract
-TernixEngine is a bare-metal, dependency-free C++20 and CUDA inference execution engine optimized exclusively for 1.58-bit ternary Large Language Models (LLMs). By completely bypassing floating-point matrix multiplications (FP16/FP32), the engine utilizes AVX2 SIMD integer operations and CUDA shared-memory warp tiling to achieve hardware-level roofline saturation. The architecture resolves the de-quantization wall by utilizing in-register weight unpacking and branchless compute operations.
+TernixEngine is a C++20 / CUDA kernel library for the core operation of 1.58-bit (ternary) LLM inference: multiplying int8 activations by weights restricted to {-1, 0, +1} and stored at 2 bits each. The kernels never unpack weights to int8/FP16 arrays, never multiply, and have no weight-dependent branches in their inner loops:
+
+* **CPU (AVX2):** weights are decoded inside a 256-bit register (`_mm256_srlv_epi32` + shift/arithmetic-shift) and applied to the activations with `_mm256_sign_epi32`; a register-blocked variant reuses each decoded weight vector for four activation rows.
+* **GPU (CUDA):** a 64x64x64 block-tiled kernel streams int8 activations and packed weights global->shared with `cp.async` through a two-stage double buffer; each thread owns a 4x4 output micro-tile and one packed weight byte covers its four columns.
+* Every kernel is checked **bit-exactly** against an independent integer GEMM on the unpacked weights, from C++ (GoogleTest), from Python (NumPy), and GPU-vs-CPU.
+
+> **Status: active research and development.** This repository is a *kernel library*, not yet an end-to-end LLM runtime: the weight quantizer (`scripts/quantize.py`) and the model loader / transformer block are stubs, and the dense BitNet block (attention + FFN) is future work. See [Current status](#10-current-status).
 
 ## Table of Contents
-1. [The Bottleneck: De-Quantization Wall & Warp Divergence](#1-the-bottleneck-de-quantization-wall--warp-divergence)
-2. [Architectural Methodology](#2-architectural-methodology)
-3. [Conceptual Overview](#3-conceptual-overview)
-4. [System Architecture](#4-system-architecture)
-5. [Directory Structure](#5-directory-structure)
-6. [Technology Stack](#6-technology-stack)
-7. [DevOps & Testing](#7-devops--testing)
-8. [Environment Setup & Execution](#8-environment-setup--execution)
-9. [Empirical Benchmarks & Evaluation](#9-empirical-benchmarks--evaluation)
-10. [Current Project Status](#10-current-project-status)
-11. [Limitations & Future Work](#11-limitations--future-work)
-12. [Troubleshooting](#12-troubleshooting)
-13. [License](#13-license)
-14. [Project Referencing Guide](#14-project-referencing-guide)
-15. [Support & Maintenance](#15-support--maintenance)
-16. [Contribution Policy](#16-contribution-policy)
+1. [The bottleneck](#1-the-bottleneck-de-quantization-wall--warp-divergence)
+2. [Kernel design](#2-kernel-design)
+3. [Conceptual overview](#3-conceptual-overview)
+4. [System architecture](#4-system-architecture)
+5. [Directory structure](#5-directory-structure)
+6. [Technology stack](#6-technology-stack)
+7. [Testing and CI](#7-testing-and-ci)
+8. [Build and run](#8-build-and-run)
+9. [Benchmarks](#9-benchmarks)
+10. [Current status](#10-current-status)
+11. [Limitations and future work](#11-limitations-and-future-work)
+12. [License](#12-license)
 
-## 1. The Bottleneck: De-Quantization Wall & Warp Divergence
-Conventional inference engines evaluating sub-byte quantized Large Language Models (LLMs) suffer from severe memory and architectural bottlenecks:
-1. **The De-Quantization Wall**: Current implementations unpack 2-bit weights into INT8 or FP16 arrays before entering the General Matrix Multiply (GEMM) loop. This read-modify-compute pattern saturates L1 cache bandwidth, stalling the arithmetic logic unit (ALU).
-2. **Sparse Branch Misprediction**: Naive implementations attempting to optimize sparse ternary weights {-1, 0, 1} use scalar conditional logic (`if (weight == 0)`). This destroys CPU branch predictor pipelines, causing instruction flushes that negate any theoretical compute savings.
-3. **CUDA Thread Divergence**: Unaligned global memory fetches for packed sub-byte weights cause extreme warp divergence and non-coalesced memory transactions, crippling SM (Streaming Multiprocessor) occupancy.
+## 1. The bottleneck: de-quantization wall & warp divergence
+Engines that evaluate sub-byte LLMs usually (1) unpack 2-bit weights into int8/FP16 before the GEMM loop, which saturates L1 bandwidth and stalls the ALUs (the *de-quantization wall*); (2) skip zero weights with scalar branches (`if (w == 0)`), which defeats the branch predictor on data-dependent patterns; and (3) on GPUs, issue unaligned sub-byte global loads that diverge warps and break coalescing.
 
-## 2. Architectural Methodology
-Our approach synthesizes techniques from 5 foundational whitepapers on 1-bit transformers and hardware scaling (BitNet, T-MAC, QuIP#, MARLIN).
+## 2. Kernel design
+All kernels compute `C[M,N] (int32) = A[M,K] (int8) x W[K,N]`, with `W` packed four ternary values per byte as a row-major `K x (N/4)` array (`00 -> 0`, `01 -> +1`, `11 -> -1`). The same layout feeds every implementation.
 
-### 2.1 SIMD In-Register Accumulation (CPU)
-Derived from the BitNet scaling architecture, the core requirement is to avoid casting activations to floats. The C++ kernel executes:
-- **Bitwise Weight Extraction**: Uses the `_mm256_srlv_epi32` AVX2 intrinsic to shift and isolate packed 2-bit weights directly within the 256-bit register. 
-- **Branchless Compute**: Uses a shift-and-arithmetic-right-shift (`_mm256_srai_epi32`) to map binary weights {00, 01, 11} to sign controls {0, 1, -1}. The `_mm256_sign_epi32` instruction applies these to the activation vector. This completely eliminates branch misprediction.
-- **Loop Tiling**: We process the matrix loops in `M -> K -> N` order (tiled by 8 along N), ensuring that the accumulator vectors remain in the L0 registers across the entire `K` dimension.
+| Kernel | File | Idea |
+|---|---|---|
+| `mul_mat_ternary_naive` | `src/mul_mat_ternary.cpp` | Reference: i-j-k loops, branching decode. Deliberately cache-hostile (strides down a column of `W`). |
+| `mul_mat_ternary_scalar` | same | Strong scalar baseline: i-k-j order, branch-free decode `w = (b & 1) - (b & 2)`. |
+| `mul_mat_ternary_avx2` | same | One output row at a time; 8 columns per register; `srlv` decode + `sign_epi32`; M->K->N tiling keeps eight int32 accumulators in a register across K. |
+| `mul_mat_ternary_avx2_blocked` | same | 4 rows per pass: one decode feeds four accumulators. |
+| `mul_mat_ternary_cuda_naive` | `src/cuda_kernels.cu` | One thread per output; baseline for the GPU numbers. |
+| `mul_mat_ternary_cuda_tiled` | same | 64x64x64 tiles, 256 threads, 4x4 outputs/thread, **`cp.async` 16-byte copies in a 2-stage pipeline** (`wait_group 1` overlaps tile t+1 with math on tile t), padded 80-byte shared rows to avoid bank conflicts. Requires M, N, K multiples of 64. |
 
-### 2.2 Offline Weight Interleaving (T-MAC)
-Ternary weights are structured offline in a transposed `K x (N/4)` layout. This layout allows the AVX2 kernel to load 16-bit packed weights without strided DRAM access. A single contiguous read fetches 8 elements across the output channels, perfectly feeding the 8 lanes of the AVX2 vector space.
+`RMSNorm` has a real AVX2+FMA implementation (`rms_norm_avx2`, tested against the scalar version for ragged sizes); `swiglu` is scalar.
 
-### 2.3 Asynchronous Warp Tiling (MARLIN)
-To mitigate the global memory latency bottleneck on the GPU, the CUDA kernel utilizes `cp.async` to bypass the L1 cache, streaming activations and weights directly into `__shared__` memory.
-- **XOR Memory Swizzling**: Prevents shared memory bank conflicts by mapping thread indices via `ty ^ tx`.
-- **Warp-Level Reduction**: Avoids thread-per-element scaling. Instead, the warp collaborates to compute 32 values along the `K` dimension, followed by a logarithmic parallel reduction using `__shfl_down_sync`.
+## 3. Conceptual overview
+Restricting weights to {-1, 0, +1} turns every multiply into an add, a subtract or nothing. Packing four such weights per byte cuts weight traffic 8x versus FP16. The kernels keep that advantage by decoding weights in registers (CPU) or in the thread that consumes them (GPU) rather than materialising unpacked tensors.
 
-## 3. Conceptual Overview
-The core idea is to reduce standard high-precision weights down to simple integers (-1, 0, 1). This allows us to replace computationally expensive floating-point multiplication with basic integer addition and subtraction. By packing four of these 2-bit values into a single byte, we can use AVX2 vector instructions to process them concurrently without conditional branching.
+## 4. System architecture
+![TernixEngine architecture](docs/assets/ternix-architecture.png)
 
-## 4. System Architecture
+The Python API (`ternix_engine`) packs NumPy weights and dispatches to any CPU or CUDA kernel; the C++ core exposes the same kernels to GoogleTest and the Google Benchmark / CUDA-event harnesses. `Model`/`Transformer` are placeholders for the future end-to-end path.
 
-![TernixEngine Architecture](TernixEngine-Architecture.png)
-The system initializes via a Python wrapper or C++ CLI. The `Model` struct parses interleaved weights from disk, aligning them in 32-byte chunks using `_mm_malloc` for SIMD compatibility. The kernel execution branches to either the highly optimized CPU AVX2 loop or the asynchronous CUDA kernel based on runtime topology.
-
-## 5. Directory Structure
+## 5. Directory structure
 ```text
 TernixEngine/
-├── benchmarks/              # Google Benchmark integration and Python graphing scripts
-│   ├── bench_end_to_end.cpp # Full pipeline inference benchmarks
-│   ├── bench_simd_math.cpp  # Microbenchmarks for scalar vs AVX2 ternary ops
-│   ├── results.json         # (Gitignored) Raw latency output from benchmarks
-│   └── benchmark_results.png# Auto-generated visualization of CPU times
-├── bindings/                # Interoperability layers
-│   └── python/
-│       └── pybind11_wrapper.cpp # Exposes C++ models to Python via Pybind11
-├── include/
-│   └── ternix/              # Public API Headers
-│       ├── bitpack.h        # 1.58-bit ternary quantization logic
-│       ├── model.h          # Model architectures and layers
-│       ├── simd_math.h      # Declarations for SIMD and baseline math
-│       ├── tensor.h         # Multi-dimensional tensor management
-│       └── transformer.h    # Transformer execution blocks
-├── scripts/
-│   └── plot_results.py      # Automates matplotlib graphing and README injection
-├── src/                     # Core Implementation
-│   ├── bitpack.cpp          # Bitwise packing implementations
-│   ├── cuda_kernels.cu      # GPU acceleration (Warp-level reductions)
-│   ├── main.cpp             # CLI entrypoint
-│   ├── model.cpp            # Model abstractions
-│   ├── mul_mat_ternary.cpp  # Core SIMD (AVX2) ternary multiplication logic
-│   ├── simd_math.cpp        # Wrappers for math algorithms
-│   ├── tensor.cpp           # Tensor memory allocation
-│   └── transformer.cpp      # Layer processing and attention mechanisms
-├── tests/                   # GoogleTest unit testing suite
-│   ├── test_bitpack.cpp     # Validates packing/unpacking accuracy
-│   └── test_simd_math.cpp   # Validates SIMD math against scalar truth
-├── CMakeLists.txt           # Build matrix config (C++20, FetchContent, CUDA)
-├── README.md                # Project documentation
-└── run_all.bat              # Universal CI/CD execution pipeline script
+├── include/ternix/        # public headers (kernels, bit-packing, SIMD math, tensor, CUDA API)
+├── src/
+│   ├── mul_mat_ternary.cpp   # naive / scalar / AVX2 / AVX2-blocked CPU kernels
+│   ├── cuda_kernels.cu       # naive and cp.async-tiled GPU kernels + host wrappers
+│   ├── bitpack.cpp           # 2-bit pack / unpack
+│   ├── simd_math.cpp         # RMSNorm (AVX2+FMA), SwiGLU
+│   ├── tensor.cpp            # 32-byte-aligned, move-only tensor storage
+│   └── model.cpp, transformer.cpp, main.cpp   # stubs for the future runtime
+├── bindings/python/       # PyBind11 module: pack/unpack, ternary_matmul(impl=...), Model
+├── tests/                 # GoogleTest (CPU, CUDA) and pytest (binding) suites
+├── benchmarks/            # Google Benchmark (CPU) and CUDA-event (GPU) harnesses, generated charts
+├── scripts/               # plot_results.py (charts + README tables), quantize.py (stub)
+├── docs/                  # research synthesis, architecture diagram
+├── CMakeLists.txt, run_all.bat, run_all.sh
+└── .github/workflows/ci.yml
 ```
 
-## 6. Technology Stack
-- **C++20**: Strict compliance for advanced memory semantics.
-- **CUDA 12.x**: For NVIDIA Ampere+ architectures.
-- **Intrinsics**: Intel AVX2 (`<immintrin.h>`).
-- **Dependencies (Git Submodules)**: Google Benchmark, GoogleTest, Pybind11.
-- **Build System**: CMake, Ninja.
+## 6. Technology stack
+C++20 (MSVC, GCC, Clang), AVX2/FMA intrinsics, CUDA (sm_80+, `cp.async`), PyBind11, CMake + Ninja, GoogleTest, Google Benchmark, pytest/NumPy. Dependencies are fetched with CMake `FetchContent`.
 
-## 7. DevOps & Testing
-Unit tests are implemented using GoogleTest, located in the `tests/` directory. They specifically validate:
-- Lossless 2-bit packing and unpacking mechanisms.
-- Mathematical accuracy of AVX2 auxiliary layers (RMSNorm, SwiGLU) compared to floating-point standards.
-Execute tests via `ctest --output-on-failure` within the build directory.
+## 7. Testing and CI
+* **C++ (`ternix_tests`):** every CPU kernel vs an independent integer GEMM on unpacked weights over ragged shapes (incl. `M` not a multiple of the row block, `K` not a multiple of 8) and an int8-extreme/K=4096 overflow case; pack/unpack round trip; RMSNorm AVX2 vs scalar.
+* **CUDA (`ternix_cuda_tests`):** both GPU kernels vs the CPU reference, bit-exact, including 64x4096x64 (many pipeline iterations); shape validation.
+* **Python (`tests/test_python_binding.py`):** all CPU and CUDA implementations vs `numpy`, input validation.
+* **CI (`.github/workflows/ci.yml`):** Linux (GCC) and Windows (MSVC) build + all CPU tests + binding tests + benchmark smoke run; a CUDA container job compiles the GPU code for sm_80/86/89/90 (hosted runners have no GPU, so GPU *execution* is verified locally).
 
-## 8. Environment Setup & Execution
+## 8. Build and run
+Requirements: a C++20 compiler with AVX2, CMake >= 3.20, Ninja (optional), Python 3.9+ with NumPy for the bindings, and optionally the CUDA toolkit (sm_80+ GPU to run the CUDA tests).
 
-### System Requirements
-**Hardware:**
-- **CPU**: x86-64 Processor with AVX2 instruction set support (Intel Haswell / AMD Zen or newer).
-- **GPU (Optional)**: NVIDIA GPU with Compute Capability 7.5+ (Turing architecture or newer) for CUDA acceleration.
-- **RAM**: Minimum 16GB (32GB+ recommended for large matrices).
+```bash
+# Linux / WSL
+./run_all.sh
+```
+```bat
+:: Windows (x64 Native Tools Command Prompt for VS)
+run_all.bat
+```
+Both scripts configure, build, run all unit tests, run the Python tests, run the benchmarks (median of 5 repetitions, pinned to a P-core via `TERNIX_BENCH_CPU`), and regenerate the charts and tables below.
 
-**Software:**
-- **OS**: Windows 10/11 (Linux support is theoretically possible via CMake, but `run_all.bat` is Windows-native).
-- **C++ Compiler**: MSVC (Visual Studio 2022/2026 Build Tools) - Must support C++20.
-- **CUDA Toolkit (Optional)**: v12.x or v13.x for GPU offloading (`nvcc` must be in PATH).
-- **Python**: 3.8+ (for plotting and pybind11 integration).
-- **Build Tools**: CMake (3.20+) and Ninja.
-- **Git**: Required for CMake `FetchContent` to download Google Benchmark, GoogleTest, and Pybind11.
+```python
+import numpy as np, ternix_engine as tx          # build/ on PYTHONPATH
+a = np.random.randint(-128, 128, (64, 256), dtype=np.int8)
+w = np.random.randint(-1, 2, (256, 128), dtype=np.int8)
+c = tx.ternary_matmul(a, tx.pack_ternary(w), impl="avx2_blocked")   # or naive | scalar | avx2 | cuda_naive | cuda_tiled
+assert (c == a.astype(np.int32) @ w.astype(np.int32)).all()
+```
 
-### Automated Pipeline
-We provide a unified batch script that handles dependencies, cache clearing, compiling, testing, benchmarking, and graphing seamlessly.
+## 9. Benchmarks
+*Testbed: Intel Core i7-14650HX (single thread, pinned to a P-core), NVIDIA GeForce RTX 5060 Laptop GPU (sm_120), MSVC 19.5 / CUDA 13.3. These tables are regenerated by `run_all`.*
 
-1. Ensure you have opened the **x64 Native Tools Command Prompt for VS** (do not use standard PowerShell).
-2. Execute the pipeline:
-   ```cmd
-   run_all.bat
-   ```
-This script automates CMake generation, compilation, unit testing, microbenchmarking, and graph visualization. Please refer to `.antigravity/tech.md` for private host setup guidelines.
+### CPU
+<!-- BENCH_CPU_START -->
+CPU: 24 logical cores, one thread, release build. Seeded random int8 activations and random ternary weights (identical for every kernel).
 
-## 9. Empirical Benchmarks & Evaluation
-Benchmarks are tracked using the Google Benchmark framework, which outputs statistical traces directly to `benchmarks/results.json`. The `scripts/plot_results.py` script visualizes this data programmatically and **dynamically injects the realtime hardware metrics directly into the table below**!
+| Kernel | 128³ ms | 256³ ms | 512³ ms | G ops/s @ 512³ | vs naive @ 512³ |
+|---|---:|---:|---:|---:|---:|
+| Naive (i-j-k, branching decode) | 5.31 | 53.12 | 445.31 | 0.60 | 1.0× |
+| Scalar (i-k-j, branch-free decode) | 1.47 | 11.23 | 86.81 | 3.09 | 5.1× |
+| AVX2, one row at a time | 0.22 | 1.80 | 14.38 | 18.67 | 31.0× |
+| AVX2, 4-row register blocking | 0.13 | 1.07 | 8.54 | 31.43 | 52.1× |
+<!-- BENCH_CPU_END -->
 
-*Hardware Testbed: Intel(R) Core(TM) i7-14650HX CPU | NVIDIA GeForce RTX 5060 Laptop GPU | 512x512 FP16/INT2 Matrix Execution*
+![CPU benchmark](benchmarks/benchmark_results.png)
 
-![Benchmark Results](benchmarks/benchmark_results.png)
+### GPU
+<!-- BENCH_GPU_START -->
+GPU: NVIDIA GeForce RTX 5060 Laptop GPU (sm_120). CUDA-event kernel time, data resident on device, median of 31 launches; every result is checked bit-for-bit against the CPU kernel.
 
-Based on our empirical microbenchmarking on a 512x512 matrix execution:
+| Size | naive ms | tiled (cp.async) ms | speed-up | tiled effective TOPS |
+|---:|---:|---:|---:|---:|
+| 512³ | 0.261 | 0.066 | 4.0× | 4.08 |
+| 1024³ | 1.866 | 0.341 | 5.5× | 6.29 |
+| 2048³ | 14.853 | 2.657 | 5.6× | 6.47 |
+| 4096³ | 118.893 | 21.280 | 5.6× | 6.46 |
+<!-- BENCH_GPU_END -->
 
-| Implementation Strategy | Loop Constraints | Instruction Set | Throughput Speedup (Actual) | Time (ms) |
-| :--- | :--- | :--- | :--- | :--- |
-| Naive Scalar | Branching `if (w == 0)` | Base C++ | 1.0x (Baseline) | 122.40 ms |
-| Tiled SIMD Accumulation | Tiled `M -> K -> N` | AVX2 (`_mm256_srlv_epi32`) | ~8.2x | 15.00 ms |
-| Asynchronous CUDA Warp | `32x32` Shared Mem | NVCC (`__shfl_down_sync`) | Pending GPU Profile | N/A |
+![GPU benchmark](benchmarks/benchmark_cuda.png)
 
-The data confirms that the structural alignment of the SIMD integer accumulations with proper weight interleaving yields over an order of magnitude improvement by eliminating the scalar control-flow hazard entirely.
+Notes on reading the numbers:
+* The "naive" reference is intentionally the textbook loop order and is cache-hostile; the **scalar** row is the fair baseline for the SIMD speed-up.
+* GPU timings are kernel-only (data resident on device). The GPU "TOPS" count 2 ops per ternary MAC and are *effective* rates, not tensor-core int8 peaks; the kernel uses CUDA cores and has not been compared with cuBLAS/cuBLASLt int8.
+* Single-thread CPU numbers on hybrid parts depend on core placement; unpinned runs can be several times slower on an E-core.
 
-## 10. Current Project Status
-The project is currently a mathematical kernel library with scaffolding. It is not yet a functional end-to-end inference engine.
+## 10. Current status
+**Working and verified:** bit-packing; naive/scalar/AVX2/AVX2-blocked CPU GEMM; naive and `cp.async`-tiled CUDA GEMM; AVX2+FMA RMSNorm; PyBind11 module exposing the kernels; test suites; CI; benchmark + chart pipeline.
 
-### Accomplishments:
-- **Core Math Kernel**: The 1.58-bit ternary matrix multiplication kernel (`src/mul_mat_ternary.cpp`) is implemented and verified. It uses AVX2 intrinsics (`_mm256_srlv_epi32`, `_mm256_sign_epi32`) for branchless, integer-only accumulation.
-- **Microbenchmarking**: Google Benchmark is integrated to measure latency, currently showing an ~8.2x speedup over the scalar branching baseline.
-- **Python Interoperability**: PyBind11 is configured and successfully compiles `ternix_engine.pyd` for python integrations.
-- **Repository Structure**: The CMake configuration, GTest suite, and initial documentation are set up.
+**Not yet implemented (active R&D):**
+* `scripts/quantize.py` is a stub: no HuggingFace weight loading, BitNet absmean scaling, or packing of a real checkpoint.
+* `Model::load` and `TransformerLayer::forward` are stubs; there is no attention/FFN forward pass or tokenizer path, so there are no tokens/s numbers.
+* `interleave_weights_offline` is an identity copy: the current layout is plain row-major packing along N, not a T-MAC-style interleaving or LUT scheme.
 
-### What is Missing / Incomplete:
-- **Weight Quantization (`quantize.py`)**: This is completely empty (a structural stub). It does not load HuggingFace models, does not apply BitNet scaling, and does not pack into our 2-bit interleaved layout yet.
-- **Model Architecture (`model.cpp`)**: The model loader is a stub. It hardcodes dimensions (32000, 4096, 32) and allocates empty memory. It does not execute a full forward pass (Attention + FFN).
-- **CUDA Kernels**: The GPU warp-reduction kernels exist structurally but require deeper validation to ensure they match the theoretical throughput of the MARLIN paper.
+## 11. Limitations and future work
+1. **End-to-end path:** quantizer, model loader, BitNet block (attention + SwiGLU FFN), KV cache, tokens/s benchmark.
+2. **CPU:** AVX-512 VNNI (`_mm512_dpbusd_epi32`) variant; multi-threading over M (OpenMP is already linked); LUT-based kernels (T-MAC, QuIP# codebooks).
+3. **GPU:** tensor-core (`mma.sync`) int8 path, `ldmatrix`-friendly layouts, ragged-shape tiles, comparison against cuBLASLt int8, CUDA-graph integration.
+4. **Accuracy:** perplexity checks against a real BitNet b1.58 checkpoint once the quantizer exists.
 
-## 11. Limitations & Future Work
-Based on our analysis of the codebase and literature:
-1. **Lookup Table (LUT) Integration**: While QuIP# and T-MAC recommend E8-lattice codebooks for cache-resident LUT operations, our current iteration hardcodes the ternary arithmetic. Future work requires generating a 1KiB LUT to process groups of weights natively.
-2. **AVX-512 VNNI**: The current architecture uses AVX2 for maximum hardware compatibility. Implementing `_mm512_dpbusd_epi32` (AVX-512) will theoretically double throughput on Sapphire Rapids and Zen 4 architectures.
-3. **End-to-End Latency Tracing**: The `bench_end_to_end.cpp` file is currently a structural stub. It must be expanded to track actual token-generation latency (Tokens/sec) rather than isolated matrix multiplications.
-
-## 12. Troubleshooting
-- **`nvcc` is not recognized**: If you installed the CUDA Toolkit but the terminal cannot find `nvcc`, you must add the CUDA binary path (e.g., `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\bin`) to your Windows system `PATH` environment variable. Additionally, ensure you completely restart your terminal or IDE so it inherits the updated PATH.
-- **Nsight VSE Installation Warnings**: When installing newer CUDA toolkits (e.g., 13.x) with newer Visual Studio versions (e.g., VS 2026), the installer may warn that it could not install the "Nsight Visual Studio Edition" plugin for an older VS version like 2022. This is completely harmless. Nsight is just a debugging UI plugin; its absence does not affect the core `nvcc` compiler or your ability to build and run CUDA code.
-- **`run_all.ps1` opens in Notepad**: We strictly utilize `.bat` files for the execution pipeline now because the MSVC x64 Native Tools terminal is built on `cmd.exe`. Do not use `.ps1` scripts for the pipeline.
-- **CMake cannot find compiler or CUDA**: Ensure you are running from the *x64 Native Tools Command Prompt*, not standard PowerShell. If it still fails, your `build/CMakeCache.txt` may be stale. Our `run_all.bat` automatically deletes this cache to prevent CMake staleness.
-- **NVCC Fatal Error (Multiple Input Files)**: If `nvcc` fails with input file errors, ensure you are using CMake Generator Expressions (`$<$<COMPILE_LANGUAGE:CXX>:/O2>`) in `CMakeLists.txt` for all optimization flags. Otherwise, CMake will pass C++ flags like `/arch:AVX2` directly to `nvcc`, which will parse them as corrupted input files.
-- **C2719 Error (MSVC)**: Ensure all `__m256i` arguments are passed by reference or pointer, as MSVC prohibits passing aligned types by value in older configurations.
-- **CUDA PTX Errors**: Verify that your NVIDIA Studio Driver matches the CUDA Toolkit version. Game Ready drivers may cause unexpected PTX instruction failures during `cp.async`.
-
-## 13. License
-This project is distributed under the **Elastic License 2.0**.
-
-What this means:
-- **[Yes]** You can view, use, and modify this code for your own internal use
-- **[Yes]** You can share this project with attribution
-- **[No]** You cannot provide the software to third parties as a hosted or managed service
-- **[No]** You cannot circumvent the licensing limitations
-
-See `LICENSE` for the full legal text. This software is provided as-is without any warranties.
-
-## 14. Project Referencing Guide
-If you utilize TernixEngine in your academic research or production environment, please use the following citation format:
+## 12. License
+Distributed under the **Elastic License 2.0**: you may view, use and modify the code, and share it with attribution; you may not offer it to third parties as a hosted or managed service or circumvent license-key functionality. See `LICENSE`. Provided as-is without warranty.
 
 ```bibtex
 @software{ternix_engine_2026,
-  author = {TernixEngine Contributors},
-  title = {TernixEngine: Hyper-Optimized 1.58-bit Inference Engine},
-  year = {2026},
-  url = {https://github.com/PundarikakshNTripathi/TernixEngine}
+  author = {Tripathi, Pundarikaksh N.},
+  title  = {TernixEngine: Ternary GEMM Kernels for CPU and GPU},
+  year   = {2026},
+  url    = {https://github.com/Quiet-Intelligence/TernixEngine}
 }
 ```
-
-## 15. Support & Maintenance
-For bug reports, feature requests, or performance optimization discussions, please open an issue in the repository. Please provide your `CMakeCache.txt` and hardware specifications when reporting performance deviations.
-
-## 16. Contribution Policy
-We welcome contributions under the Elastic License 2.0. Please refer to `CONTRIBUTING.md` for guidelines on workflow, standards, and issue reporting. Please ensure all new kernels include corresponding unit tests in the `tests/` directory and update the `README.md` if adding new CLI flags or features.

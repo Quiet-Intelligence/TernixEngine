@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build/_deps/benchmark-subbuild/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

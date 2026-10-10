@@ -1,14 +1,14 @@
-# CMake / Build
+# CMake / build outputs
 build/
+out/
 bin/
 lib/
-out/
 CMakeCache.txt
 CMakeFiles/
-*.cmake
 Makefile
+*.cmake
 
-# IDEs
+# IDE / editor state
 .vs/
 .vscode/
 *.swp
@@ -18,10 +18,8 @@ Makefile
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
-
-
-# Dynamic Benchmark Data
-benchmarks/*.json
+# Raw benchmark dumps (README tables and benchmarks/*.png are generated from these and tracked)
 benchmarks/*.csv
-# Note: benchmarks/benchmark_results.png is tracked!
+benchmarks/*.json

@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  cpu:
+    name: CPU build and tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python test dependencies
+        run: python -m pip install numpy pytest
+      - name: Configure
+        shell: bash
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DPYTHON_EXECUTABLE="$(which python)"
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: C++ unit tests (kernels vs reference GEMM, pack/unpack, RMSNorm)
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Python binding tests
+        shell: bash
+        run: |
+          export PYTHONPATH="$PWD/build:$PWD/build/Release"
+          python -m pytest tests/test_python_binding.py -q
+      - name: Benchmark smoke run (not a performance gate)
+        shell: bash
+        run: |
+          for b in build/bench_simd_math build/Release/bench_simd_math.exe; do
+            if [ -x "$b" ]; then "$b" --benchmark_min_time=0.01s --benchmark_filter='/128$'; fi
+          done
+
+  cuda-compile:
+    # Hosted runners have no GPU: this job proves the CUDA kernels, tests and benchmark compile
+    # for Ampere/Ada/Hopper. Correctness on hardware is checked by `ternix_cuda_tests` locally.
+    name: CUDA compile check
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.6.2-devel-ubuntu22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends cmake ninja-build git ca-certificates python3-dev python3-pip libomp-dev
+      - name: Configure and build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90"
+          cmake --build build --parallel

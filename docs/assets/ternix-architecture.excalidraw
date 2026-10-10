@@ -1,0 +1,556 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "excalidraw-cli",
+  "elements": [
+    {
+      "id": "title",
+      "type": "text",
+      "x": 20,
+      "y": 8,
+      "strokeColor": "#212529",
+      "roughness": 0,
+      "text": "TernixEngine: ternary GEMM on CPU (AVX2) and GPU (CUDA)",
+      "fontSize": 30,
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "zi",
+      "type": "rectangle",
+      "x": 10,
+      "y": 70,
+      "width": 400,
+      "height": 700,
+      "backgroundColor": "#f1f3f5",
+      "strokeColor": "#868e96",
+      "strokeWidth": 2,
+      "strokeStyle": "dashed",
+      "roughness": 0,
+      "opacity": 55,
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "zi_t",
+      "type": "text",
+      "x": 28,
+      "y": 82,
+      "strokeColor": "#868e96",
+      "roughness": 0,
+      "text": "Inputs and packing",
+      "fontSize": 22,
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "zc",
+      "type": "rectangle",
+      "x": 520,
+      "y": 70,
+      "width": 1200,
+      "height": 350,
+      "backgroundColor": "#ffe8cc",
+      "strokeColor": "#e8590c",
+      "strokeWidth": 2,
+      "strokeStyle": "dashed",
+      "roughness": 0,
+      "opacity": 55,
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "zc_t",
+      "type": "text",
+      "x": 538,
+      "y": 82,
+      "strokeColor": "#e8590c",
+      "roughness": 0,
+      "text": "CPU kernels (one thread)",
+      "fontSize": 22,
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "zg",
+      "type": "rectangle",
+      "x": 520,
+      "y": 450,
+      "width": 1200,
+      "height": 320,
+      "backgroundColor": "#d3f9d8",
+      "strokeColor": "#2f9e44",
+      "strokeWidth": 2,
+      "strokeStyle": "dashed",
+      "roughness": 0,
+      "opacity": 55,
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "zg_t",
+      "type": "text",
+      "x": 538,
+      "y": 462,
+      "strokeColor": "#2f9e44",
+      "roughness": 0,
+      "text": "GPU kernels (sm_80+)",
+      "fontSize": 22,
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "a",
+      "type": "rectangle",
+      "x": 30,
+      "y": 120,
+      "width": 360,
+      "height": 100,
+      "backgroundColor": "#d0ebff",
+      "strokeColor": "#1971c2",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "A: int8 activations (M x K)\nread directly by every kernel"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "w",
+      "type": "rectangle",
+      "x": 30,
+      "y": 240,
+      "width": 360,
+      "height": 80,
+      "backgroundColor": "#d0ebff",
+      "strokeColor": "#1971c2",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "W: ternary {-1,0,+1} (K x N)"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "pk",
+      "type": "rectangle",
+      "x": 30,
+      "y": 350,
+      "width": 360,
+      "height": 150,
+      "backgroundColor": "#f3d9fa",
+      "strokeColor": "#9c36b5",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "pack_ternary_weights\n2 bits per weight\nK x N/4 bytes\n00 = 0, 01 = +1, 11 = -1"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "py",
+      "type": "rectangle",
+      "x": 30,
+      "y": 570,
+      "width": 360,
+      "height": 170,
+      "backgroundColor": "#f1f3f5",
+      "strokeColor": "#868e96",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "Python: ternix_engine\npack_ternary\nternary_matmul(impl=...)\nnaive | scalar | avx2 |\navx2_blocked | cuda_*"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "n",
+      "type": "rectangle",
+      "x": 550,
+      "y": 130,
+      "width": 300,
+      "height": 80,
+      "backgroundColor": "#f1f3f5",
+      "strokeColor": "#868e96",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "naive: i-j-k, branches"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "s",
+      "type": "rectangle",
+      "x": 890,
+      "y": 130,
+      "width": 300,
+      "height": 80,
+      "backgroundColor": "#f1f3f5",
+      "strokeColor": "#868e96",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "scalar: i-k-j, branch-free"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "v",
+      "type": "rectangle",
+      "x": 550,
+      "y": 250,
+      "width": 640,
+      "height": 130,
+      "backgroundColor": "#ffe8cc",
+      "strokeColor": "#e8590c",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "AVX2 row kernel: srlv_epi32 -> and 3 -> slli/srai 30\n-> sign_epi32(a, w) -> add_epi32; 8 columns per register"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "vb",
+      "type": "rectangle",
+      "x": 1230,
+      "y": 250,
+      "width": 460,
+      "height": 130,
+      "backgroundColor": "#ffe8cc",
+      "strokeColor": "#e8590c",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "AVX2 register-blocked\none decode feeds 4 rows"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "cn",
+      "type": "text",
+      "x": 1230,
+      "y": 140,
+      "strokeColor": "#495057",
+      "roughness": 0,
+      "text": "512^3, one thread:\n0.6 / 3.1 / 18.7 / 31.4 G ops/s",
+      "fontSize": 18,
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "gn",
+      "type": "rectangle",
+      "x": 1200,
+      "y": 490,
+      "width": 490,
+      "height": 90,
+      "backgroundColor": "#f1f3f5",
+      "strokeColor": "#868e96",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "naive: one thread per output"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "gt",
+      "type": "rectangle",
+      "x": 550,
+      "y": 490,
+      "width": 620,
+      "height": 250,
+      "backgroundColor": "#d3f9d8",
+      "strokeColor": "#2f9e44",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "tiled 64x64x64, 256 threads, 4x4 outputs / thread\ncp.async 16 B copies, 2-stage double buffer\npadded 80 B shared rows (no bank conflicts)\none packed byte = the thread's 4 columns"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "go",
+      "type": "rectangle",
+      "x": 1200,
+      "y": 620,
+      "width": 490,
+      "height": 120,
+      "backgroundColor": "#c5f6fa",
+      "strokeColor": "#0c8599",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "label": {
+        "text": "int32 C (M x N)\nGPU == CPU bit-exact"
+      },
+      "roundness": {
+        "type": 3
+      },
+      "fillStyle": "solid",
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1
+    },
+    {
+      "id": "mv1ropwpr0agy56mjv",
+      "type": "arrow",
+      "x": 210,
+      "y": 328,
+      "strokeColor": "#495057",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "endArrowhead": "arrow",
+      "elbowed": false,
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          14
+        ]
+      ],
+      "startBinding": {
+        "elementId": "w",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "pk",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "mv1ropwpcfhojcf29ef",
+      "type": "arrow",
+      "x": 397.89115139065717,
+      "y": 393.68480810155717,
+      "strokeColor": "#495057",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "endArrowhead": "arrow",
+      "elbowed": false,
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          144.21769721868571,
+          -24.036282869780962
+        ]
+      ],
+      "startBinding": {
+        "elementId": "pk",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "v",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "mv1ropwp834kt31kdm7",
+      "type": "arrow",
+      "x": 397.67867556540364,
+      "y": 479.85992054988725,
+      "strokeColor": "#495057",
+      "strokeWidth": 2,
+      "strokeStyle": "dashed",
+      "roughness": 0,
+      "endArrowhead": "arrow",
+      "elbowed": false,
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          144.64264886919273,
+          42.28015890022556
+        ]
+      ],
+      "startBinding": {
+        "elementId": "pk",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "gt",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "mv1ropwp6g2vsgy27qw",
+      "type": "arrow",
+      "x": 1198,
+      "y": 315,
+      "strokeColor": "#495057",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "endArrowhead": "arrow",
+      "elbowed": false,
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          24,
+          0
+        ]
+      ],
+      "startBinding": {
+        "elementId": "v",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "vb",
+        "focus": 0,
+        "gap": 8
+      }
+    },
+    {
+      "id": "mv1ropwp8w3xrwmq532",
+      "type": "arrow",
+      "x": 1177.951069877389,
+      "y": 650.3278966530432,
+      "strokeColor": "#495057",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "endArrowhead": "arrow",
+      "elbowed": false,
+      "createdAt": "2026-10-10T02:20:31.657Z",
+      "updatedAt": "2026-10-10T02:20:31.657Z",
+      "version": 1,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          14.09786024522191,
+          1.5664289161358056
+        ]
+      ],
+      "startBinding": {
+        "elementId": "gt",
+        "focus": 0,
+        "gap": 8
+      },
+      "endBinding": {
+        "elementId": "go",
+        "focus": 0,
+        "gap": 8
+      }
+    }
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff",
+    "gridSize": null
+  }
+}
