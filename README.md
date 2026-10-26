@@ -34,6 +34,8 @@ BitNet b1.58 2B4T, pp128 / tg64, 7 interleaved rounds, median (min..max); bytes/
 | baseline GPU (dp4a GEMV, no graph) | 1226 (1140..1241) | 137 (129..148) | 1177 MB |
 | GPU, bf16 head | 3478 (3342..3503) | 212 (194..212) | 1177 MB |
 | GPU, certified int8 head | **3565** (3123..3582) | **257** (244..260) | 850 MB |
+| reference: Hugging Face transformers, GPU bf16 (online weight quantisation) | 77.8 | 0.64 | 4825 MB |
+| reference: Hugging Face transformers, CPU bf16, 16 threads | 1.5 | 0.053 | 4825 MB |
 
 \* single 128-token CPU passes are noisy (min..max spans 1.7x) and the head cannot affect prefill: differences between those rows are noise.
 CPU decode is memory bound: the measured read ceiling was 38.4 GB/s (26 GB/s in an earlier, loaded session, so ceilings are only comparable within a
@@ -129,7 +131,7 @@ The comparison against llama.cpp (TQ1_0/TQ2_0/Q2_0), bitnet.cpp (I2_S, TL1, TL2)
 auto-mode permission classifier denied building third-party code and executing downloaded binaries, and that decision belongs to the repository
 owner. The harness is ready (`bench/ternixbench.py`, `bench/COMPETITORS.md` lists the exact commands, official release hashes verified).
 Until those numbers exist, no claim of being faster than any other engine is made. The official Hugging Face PyTorch path is measured as
-a reference in the results above.
+a reference in the results above (it re-quantises the bf16 weights on every forward pass, as its model card warns; not an efficiency baseline).
 
 ## Limitations and roadmap
 1. One architecture (BitNet b1.58 block, per-tensor scale). 2026 ternary models (Ternary Bonsai, CAT-Q/Qwen3-class conversions) use group-128 scales,
