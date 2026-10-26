@@ -54,4 +54,4 @@ Numbers from different sessions are not comparable (the read ceiling moved betwe
 
 ## 5. Future work
 A GPU backend for the group-scaled architecture, further 2026 ternary families, AVX-512 VNNI and NEON kernels, a certified top-k head for sampling, speculative decoding with a
-ternary draft, KV compression for long-context models, the competitor comparison, and energy measurement with a wall-power meter (package/board power only is measured here).
+ternary draft, KV compression for long-context models, the competitor comparison, and energy measurement with a wall-power meter (EXP-010 measured package and board power only, two passes).

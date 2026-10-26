@@ -140,7 +140,8 @@ a reference in the results above (it re-quantises the bf16 weights on every forw
 3. The int4 head's guarantee is statistical (6.5 sigma, 0 misses in 12,024 positions); only int8 is proved. Sampling sees exact logits for the
    candidates and approximate logits elsewhere.
 4. Single-sequence decoding; no continuous batching, no paged KV, no speculative decoding.
-5. Energy: CPU package power (Windows RAPL energy meter) and GPU board power are measured above idle (`bench/energy.py`); DRAM, fans and wall power are not (no meter; the DRAM counter reads 0).
+5. Energy (EXP-010): CPU package power (Windows RAPL energy meter) and GPU board power above idle, two passes: 1.4-2.4 J/token on the CPU (differences between head variants are within the
+   pass-to-pass spread), 0.38-0.50 J/token on the GPU. DRAM, fans and wall power are not measured (no meter; the DRAM counter reads 0).
 
 ## License
 Distributed under the **Elastic License 2.0** (`LICENSE`): use, modify and share with attribution; not as a hosted/managed service; no

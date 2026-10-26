@@ -1,0 +1,91 @@
+{
+ "idle_package_w": 14.40282894885,
+ "idle_gpu_w": 16.013958333333335,
+ "background_cpu_pct": 6.915644833333333,
+ "runs": [
+  {
+   "name": "ternix CPU bf16 head",
+   "decode_tok_s": 30.51,
+   "package_w": 64.66614061928571,
+   "gpu_w": 15.706300578034682,
+   "j_per_token_package_above_idle": 1.6474372884443038,
+   "j_per_token_gpu_above_idle": -0.010083833343122019,
+   "j_per_token_total_above_idle": 1.6373534551011817,
+   "window_s": 35.33294987678528,
+   "cpu_samples": 35,
+   "gpu_samples": 173
+  },
+  {
+   "name": "ternix CPU int8 head",
+   "decode_tok_s": 40.19,
+   "package_w": 77.91218337158334,
+   "gpu_w": 15.401104972375691,
+   "j_per_token_package_above_idle": 1.580227778619889,
+   "j_per_token_gpu_above_idle": -0.015248901740672895,
+   "j_per_token_total_above_idle": 1.564978876879216,
+   "window_s": 36.770248889923096,
+   "cpu_samples": 36,
+   "gpu_samples": 181
+  },
+  {
+   "name": "ternix CPU int8 head + sparse down",
+   "decode_tok_s": 45.1,
+   "package_w": 92.62158217060527,
+   "gpu_w": 11.910378378378379,
+   "j_per_token_package_above_idle": 1.734340426202999,
+   "j_per_token_gpu_above_idle": -0.09098846906773737,
+   "j_per_token_total_above_idle": 1.6433519571352617,
+   "window_s": 37.81906509399414,
+   "cpu_samples": 38,
+   "gpu_samples": 185
+  },
+  {
+   "name": "ternix CPU int4 head + sparse down",
+   "decode_tok_s": 55.46,
+   "package_w": 98.50563813284616,
+   "gpu_w": 11.96828125,
+   "j_per_token_package_above_idle": 1.516458874576202,
+   "j_per_token_gpu_above_idle": -0.07294765747084989,
+   "j_per_token_total_above_idle": 1.4435112171053521,
+   "window_s": 39.305750608444214,
+   "cpu_samples": 39,
+   "gpu_samples": 192
+  },
+  {
+   "name": "ternix GPU bf16 head",
+   "decode_tok_s": 203.14,
+   "package_w": 40.79778924069444,
+   "gpu_w": 83.68581920903955,
+   "j_per_token_package_above_idle": 0.1299348247112555,
+   "j_per_token_gpu_above_idle": 0.3331291763104569,
+   "j_per_token_total_above_idle": 0.4630640010217124,
+   "window_s": 36.083709716796875,
+   "cpu_samples": 36,
+   "gpu_samples": 177
+  },
+  {
+   "name": "ternix CPU int8 head (Ternary-Bonsai-1.7B, arch 2)",
+   "decode_tok_s": 50.61,
+   "package_w": 95.07089900848717,
+   "gpu_w": 16.904375,
+   "j_per_token_package_above_idle": 1.5939156305006357,
+   "j_per_token_gpu_above_idle": 0.01759369031153264,
+   "j_per_token_total_above_idle": 1.6115093208121682,
+   "window_s": 39.268404483795166,
+   "cpu_samples": 39,
+   "gpu_samples": 192
+  },
+  {
+   "name": "ternix GPU int8 head",
+   "decode_tok_s": 249.05,
+   "package_w": 51.383645232228574,
+   "gpu_w": 85.40549132947977,
+   "j_per_token_package_above_idle": 0.14848751770077723,
+   "j_per_token_gpu_above_idle": 0.2786249066297789,
+   "j_per_token_total_above_idle": 0.42711242433055613,
+   "window_s": 35.22177076339722,
+   "cpu_samples": 35,
+   "gpu_samples": 173
+  }
+ ]
+}
