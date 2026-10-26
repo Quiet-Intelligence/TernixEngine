@@ -25,6 +25,8 @@ every 128-column block), and a tied fp16 head (the certified int8 head works on 
 * `i2k::gemm_rows` (src/i2k.cpp): I2K128 weights, `vpdpbusd` (AVX-VNNI) or `vpmaddubsw`+`vpmaddwd` (AVX2) or scalar, selected at run
   time from cpuid (`TERNIX_ISA` can lower it). Codes {0,1,2} are used as the unsigned operand; the sum of the activations is
   subtracted once per row. Four output rows share each activation load; up to four activation rows share each decoded weight.
+* `i2k::gemm_rows_avx512` (src/i2k_avx512.cpp, own translation unit with `/arch:AVX512`): two 128-column blocks per 64-byte weight load, `vpdpbusd` on zmm, 256-bit tail for an odd
+  block count. Opt-in (`TERNIX_ISA=avx512_vnni`) and unexecuted on hardware; `tests/i2k_avx512_emulated.cpp` compiles the same source against scalar-emulated intrinsics.
 * `ThreadPool` (src/threadpool.cpp): persistent workers pinned to performance cores, dynamic chunk claiming from one atomic
   counter, spin-then-wait. One `parallel_for` per fused group of projections (q/k/v, gate/up).
 * `OutputHead` (src/head.cpp): optional int8 / int4 copy of the head with per-row residual norms; greedy decoding is certified

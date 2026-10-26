@@ -42,7 +42,7 @@ CpuInfo detect() {
         cpuid(r, 7, 0);
         c.avx2 = ymm_ok && ((r[1] >> 5) & 1);
         const bool zmm_ok = osxsave && ((xgetbv0() & 0xE6) == 0xE6);
-        c.avx512_vnni = zmm_ok && ((r[1] >> 16) & 1) && ((r[2] >> 11) & 1);
+        c.avx512_vnni = zmm_ok && ((r[1] >> 16) & 1) && ((r[1] >> 30) & 1) && ((r[1] >> 31) & 1) && ((r[2] >> 11) & 1);   // F, BW, VL, VNNI
         cpuid(r, 7, 1);
         c.avx_vnni = ymm_ok && ((r[0] >> 4) & 1);
     }
@@ -62,6 +62,7 @@ Isa best_isa() {
     const CpuInfo& c = cpu_info();
     Isa best = c.avx_vnni ? Isa::AvxVnni : (c.avx2 ? Isa::Avx2 : Isa::Scalar);
     if (const char* e = std::getenv("TERNIX_ISA")) {
+        if (!std::strcmp(e, "avx512_vnni") && c.avx512_vnni) return Isa::Avx512Vnni;
         Isa cap = best;
         if (!std::strcmp(e, "scalar")) cap = Isa::Scalar;
         else if (!std::strcmp(e, "avx2")) cap = Isa::Avx2;
@@ -76,6 +77,7 @@ const char* isa_name(Isa isa) {
         case Isa::Scalar: return "scalar";
         case Isa::Avx2: return "avx2";
         case Isa::AvxVnni: return "avx_vnni";
+        case Isa::Avx512Vnni: return "avx512_vnni";
     }
     return "?";
 }
