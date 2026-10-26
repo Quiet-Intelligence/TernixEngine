@@ -1,0 +1,112 @@
+{
+ "engines": [
+  {
+   "name": "ternix CPU bf16 head",
+   "kind": "ternix",
+   "cmd": [
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build-dev/ternix_cli.exe",
+    "bench",
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/models/bitnet-2b4t.ternix"
+   ],
+   "model": "bitnet-b1.58-2B-4T (ternix, I2K128)",
+   "bpw": 2.0,
+   "bytes_per_token": 1177700000,
+   "build": "ternix HEAD",
+   "notes": "current kernels, bf16 head"
+  },
+  {
+   "name": "ternix CPU int8 head",
+   "kind": "ternix",
+   "cmd": [
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build-dev/ternix_cli.exe",
+    "bench",
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/models/bitnet-2b4t.ternix",
+    "--head",
+    "int8"
+   ],
+   "model": "bitnet-b1.58-2B-4T (ternix, I2K128)",
+   "bpw": 2.0,
+   "bytes_per_token": 850400000,
+   "build": "ternix HEAD",
+   "notes": "certified-exact int8 head"
+  },
+  {
+   "name": "ternix CPU int8 head + sparse down",
+   "kind": "ternix",
+   "cmd": [
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build-dev/ternix_cli.exe",
+    "bench",
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/models/bitnet-2b4t.ternix",
+    "--head",
+    "int8",
+    "--sparse-down"
+   ],
+   "model": "bitnet-b1.58-2B-4T (ternix, I2K128)",
+   "bpw": 2.0,
+   "bytes_per_token": 798300000,
+   "build": "ternix HEAD",
+   "notes": "+ exact sparse down projection"
+  },
+  {
+   "name": "ternix CPU int4 head + sparse down",
+   "kind": "ternix",
+   "cmd": [
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build-dev/ternix_cli.exe",
+    "bench",
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/models/bitnet-2b4t.ternix",
+    "--head",
+    "int4",
+    "--sparse-down"
+   ],
+   "model": "bitnet-b1.58-2B-4T (ternix, I2K128)",
+   "bpw": 2.0,
+   "bytes_per_token": 654100000,
+   "build": "ternix HEAD",
+   "notes": "statistical int4 head"
+  },
+  {
+   "name": "ternix GPU bf16 head",
+   "kind": "ternix",
+   "cmd": [
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build-dev/ternix_cli.exe",
+    "bench",
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/models/bitnet-2b4t.ternix",
+    "--gpu"
+   ],
+   "model": "bitnet-b1.58-2B-4T (ternix, I2K128)",
+   "bpw": 2.0,
+   "bytes_per_token": 1177700000,
+   "build": "ternix HEAD",
+   "notes": "graph, tensor-core prefill, split-KV attention"
+  },
+  {
+   "name": "ternix CPU int8 head (Ternary-Bonsai-1.7B, arch 2)",
+   "kind": "ternix",
+   "cmd": [
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build-dev/ternix_cli.exe",
+    "bench",
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/models/bonsai-1p7b.ternix",
+    "--head",
+    "int8"
+   ],
+   "model": "Ternary-Bonsai-1.7B (ternix arch 2)"
+  },
+  {
+   "name": "ternix GPU int8 head",
+   "kind": "ternix",
+   "cmd": [
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/build-dev/ternix_cli.exe",
+    "bench",
+    "C:/PROFESSIONAL/Development/AI-HPC/TernixEngine/models/bitnet-2b4t.ternix",
+    "--gpu",
+    "--head",
+    "int8"
+   ],
+   "model": "bitnet-b1.58-2B-4T (ternix, I2K128)",
+   "bpw": 2.0,
+   "bytes_per_token": 850400000,
+   "build": "ternix HEAD",
+   "notes": "certified-exact int8 head"
+  }
+ ]
+}
