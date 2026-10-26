@@ -62,7 +62,7 @@ def main() -> None:
             block("no attribution lines in commit messages.")
     for i, seg in enumerate(segs):
         # a commit that follows a branch switch/creation in the same line is judged on the new branch, which we cannot know yet
-        later_checkout = any(re.match(r"git\s+(checkout|switch)\s+(-b|-c)\b", p) for p in segs[:i])
+        later_checkout = any(re.match(r"git\s+(checkout|switch)\b.*\s-[bcBC]\b", p) for p in segs[:i])
         check_segment(seg, cwd, later_checkout)
 
 

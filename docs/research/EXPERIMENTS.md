@@ -264,3 +264,10 @@ Reading: CPU decode was already at the memory ceiling in the baseline (24.9 tok/
 0.4-0.7 s, min..max spans 1.7x) and the head mode cannot affect it, so the differences between its rows are noise, not effects. On the GPU the same
 byte reduction compounds with CUDA-graph replay (launch overhead), tensor cores and split-KV attention: decode 1.88x, prefill 2.9x over the
 baseline commit.
+
+## Reference timing of the official Hugging Face path
+
+`bench/hf_bench.py` through `bench/ternixbench.py` (`speed_hf_pytorch.json`, pp128 / tg16, 3 rounds, median): transformers, bf16, GPU: 77.8 tok/s prefill,
+0.64 tok/s decode; CPU bf16 with 16 threads: 1.5 and 0.053 tok/s. The path quantises the bf16 master weights on every forward pass (`quantization_mode: online`), which is what the model
+card means by "do not expect efficiency gains"; it is a correctness reference, not a performance baseline. The TernixEngine decode on the same GPU is 400x faster, a figure that
+says more about the reference than about the engine. No llama.cpp, bitnet.cpp or T-MAC measurement exists yet (see `bench/COMPETITORS.md`).
