@@ -1,3 +1,8 @@
+> **Superseded in part (2026-10).** This note records the original synthesis of the five foundation papers. The 2024-2026 literature survey,
+> the gap analysis and the measured results are in `references/INDEX.md`, `references/ANALYSIS.md` and `docs/research/EXPERIMENTS.md`. Two of the
+> directives below were tested and revised: T-MAC-style offline interleaving is implemented as the I2K128 layout, and the 32x32 `__shfl_down_sync` warp
+> reduction was replaced by warp-per-row dp4a and `mma.sync` kernels (docs/ARCHITECTURE.md).
+
 # Research Synthesis: 1.58-bit SIMD-Native Inference Engine
 
 ## 1. Introduction

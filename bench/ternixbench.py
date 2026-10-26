@@ -11,7 +11,7 @@ Design rules (see references/ANALYSIS.md section 4):
     python bench/ternixbench.py speed --config bench/engines.json --rounds 9 --out results/speed.json
     python bench/ternixbench.py report results/speed.json > results/speed.md
 
-engines.json: {"model_bytes_per_token": {...}, "engines": [{"name", "kind": "ternix|llamabench", "cmd": [...], "model": "...", "bpw": 2.0, ...}]}
+engines.json: {"engines": [{"name", "kind": "ternix|llamabench|hfpy", "cmd": [...], "model": "...", "bpw": 2.0, "bytes_per_token": N, "repo": "path for the commit hash"}]}
 """
 from __future__ import annotations
 
@@ -85,6 +85,10 @@ def one_run(e: dict, pp: int, tg: int) -> dict:
         return parse_ternix_bench(run(e["cmd"] + ["--pp", str(pp), "--tg", str(tg), "--reps", "1"]))
     if e["kind"] == "llamabench":
         return parse_llama_bench(run(e["cmd"] + ["-p", str(pp), "-n", str(tg), "-r", "1", "-o", "json"]), pp, tg)
+    if e["kind"] == "hfpy":
+        out = run(e["cmd"] + ["--pp", str(pp), "--tg", str(tg), "--reps", "1"])
+        d = json.loads(out.strip().splitlines()[-1])
+        return {"pp_tps": d["pp_tps"], "tg_tps": d["tg_tps"]}
     raise ValueError(e["kind"])
 
 
@@ -106,7 +110,11 @@ def cmd_speed(args) -> None:
                 for k, v in m.items():
                     results[e["name"]][k].append(v)
             print(f"round {r} {e['name']}: {m}", file=sys.stderr, flush=True)
-    out = {"env": collect_env(args.membw), "pp": args.pp, "tg": args.tg, "rounds": args.rounds, "engines": []}
+    try:
+        env = collect_env(args.membw)
+    except Exception as ex:
+        env = {"error": str(ex)}
+    out = {"env": env, "pp": args.pp, "tg": args.tg, "rounds": args.rounds, "engines": []}
     for e in engines:
         res = results[e["name"]]
         rec = {k: e[k] for k in ("name", "kind", "model", "bpw", "bytes_per_token", "build", "notes") if k in e}
