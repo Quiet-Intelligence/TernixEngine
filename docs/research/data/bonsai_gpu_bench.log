@@ -1,0 +1,9 @@
+# 2026-10-26T17:55:45+05:30 commit 0476e5c+worktree; RTX 5060 Laptop, CUDA 13.3; Ternary-Bonsai-1.7B arch 2; pp128 tg128 reps 7
+== gpu head bf16
+model models/bonsai-1p7b.ternix | cuda | cpu: Intel(R) Core(TM) i7-14650HX
+prefill 128 tok: median 4740.8 tok/s (min 4733.4 max 4751.6)
+decode  128 tok: median 209.55 tok/s (min 207.57 max 210.33)
+== gpu head int8
+model models/bonsai-1p7b.ternix | cuda | cpu: Intel(R) Core(TM) i7-14650HX
+prefill 128 tok: median 4874.2 tok/s (min 4848.4 max 4898.1)
+decode  128 tok: median 250.97 tok/s (min 248.93 max 251.40)

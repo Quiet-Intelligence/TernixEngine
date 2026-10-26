@@ -51,6 +51,7 @@ namespace ternix {
 void cuda_test_ternary_gemv(const uint8_t* W, const int8_t* q, const float* deq, const int32_t* sumq, float scale, float* y, int nt, int N, int K);
 // RMSNorm + absmax int8 quantisation of nt rows (mode 0) -> q (nt*K), deq (nt), sumq (nt)
 void cuda_test_ternary_mma(const uint8_t* W, const int8_t* q, const float* deq, const int32_t* sumq, float scale, float* y, int M, int N, int K);
+void cuda_test_ternary_gs(const uint8_t* W, const uint16_t* gs, const int8_t* q, const float* deq, const int32_t* sumq, float* y, int M, int N, int K, bool tc);
 void cuda_test_rmsnorm_quant(const float* x, const float* w, float eps, int nt, int K, int8_t* q, float* deq, int32_t* sumq);
 }
 #endif

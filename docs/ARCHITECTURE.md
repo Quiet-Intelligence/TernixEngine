@@ -17,7 +17,8 @@ softmax are float32; K/V are fp16 (CPU optionally int8); the head is the tied bf
 
 Architecture 2 (Qwen3-style, e.g. Ternary-Bonsai-1.7B) replaces the sub-norm/ReLU^2 block by: per-head RMSNorm of q and k (QK-norm) before RoPE,
 SiLU-GLU, YaRN rotary tables from a precomputed `rope.inv_freq` times the attention factor, per-128-group weight scales with per-128-block activation
-quantisation (`i2k::gemm_rows_gs`), and a tied fp16 head. CPU only; the CUDA engine rejects `arch != 1`.
+quantisation (`i2k::gemm_rows_gs` on the CPU; `ternary_gemv_gs_kernel` and `ternary_mma_gs_kernel` on the GPU, which fold the int32 accumulators into float after
+every 128-column block), and a tied fp16 head (the certified int8 head works on fp16 rows as well). Both backends run it.
 
 ## CPU backend
 

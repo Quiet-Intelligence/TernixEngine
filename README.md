@@ -134,8 +134,8 @@ Until those numbers exist, no claim of being faster than any other engine is mad
 a reference in the results above (it re-quantises the bf16 weights on every forward pass, as its model card warns; not an efficiency baseline).
 
 ## Limitations and roadmap
-1. Two architectures: the BitNet b1.58 block (CPU + GPU) and a Qwen3-style group-scaled block (Ternary-Bonsai-1.7B; CPU only, 2x slower per
-   weight byte than the BitNet kernel: prefill ~125 tok/s, decode ~20 tok/s). Other 2026 families (CAT-Q conversions, Falcon-E, Sherry, TriLM) are not loaded.
+1. Two architectures: the BitNet b1.58 block (CPU + GPU) and a Qwen3-style group-scaled block (Ternary-Bonsai-1.7B; CPU: prefill ~125 tok/s,
+   decode ~20 tok/s; GPU: prefill ~4.8k tok/s, decode 210 tok/s, 251 with the certified int8 head). Other 2026 families (CAT-Q conversions, Falcon-E, Sherry, TriLM) are not loaded.
 2. CPU kernels target AVX2/AVX-VNNI; AVX-512 VNNI and ARM NEON/SDOT are not implemented.
 3. The int4 head's guarantee is statistical (6.5 sigma, 0 misses in 12,024 positions); only int8 is proved. Sampling sees exact logits for the
    candidates and approximate logits elsewhere.

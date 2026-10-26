@@ -1,0 +1,18 @@
+[
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape0-avx2]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape0-avx2_blocked]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape0-naive]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape0-scalar]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape1-avx2]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape1-avx2_blocked]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape1-naive]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape1-scalar]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape2-avx2]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape2-avx2_blocked]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape2-naive]",
+  "test_python_binding.py::test_cpu_kernels_match_numpy[shape2-scalar]",
+  "test_python_binding.py::test_cuda_kernels_match_numpy[cuda_naive]",
+  "test_python_binding.py::test_cuda_kernels_match_numpy[cuda_tiled]",
+  "test_python_binding.py::test_input_validation",
+  "test_python_binding.py::test_pack_unpack_roundtrip"
+]
