@@ -291,7 +291,7 @@ Baseline: transformers 5.x, fp32 (logits) / fp16 GPU (perplexity), weight-only. 
 Stopping rule: one pass; four prompts for H1, one perplexity run for H2. Not tested here: the GPU backend (arch 2 is CPU-only) and long-context YaRN behaviour.
 Command: `python scripts/verify_qwen3.py --hf models/Ternary-Bonsai-1.7B-unpacked --ternix models/bonsai-1p7b.ternix`; raw output `docs/research/data/verify_qwen3.json`.
 
-## EXP-009 outcome: Qwen3-style group-scaled architecture
+## EXP-009 outcome: Qwen3-style group-scaled architecture (CPU)
 
 Run 2026-10-26 on the CPU engine (`docs/research/data/verify_qwen3.json`). Both hypotheses hold.
 
@@ -306,3 +306,16 @@ Run 2026-10-26 on the CPU engine (`docs/research/data/verify_qwen3.json`). Both 
 * Speed (CPU, int8 head, pp128 / tg64, 5 reps; the machine was shared with another user job at 30-50% CPU so spreads are wide): row-by-row kernel prefill 92 / decode 19 tok/s;
   register-tiled kernel (MR x NR) prefill 125 / decode 20-21 tok/s. For comparison the BitNet kernel reaches 260-450 prefill. The group-scaled kernel pays an int->float
   conversion and fused multiply-add per 128-column block and per row; a fully integer scheme with one scale per row was not possible because scales differ per group.
+
+## EXP-009 addendum: GPU backend for architecture 2
+
+Not pre-registered as a separate experiment (an engineering step whose correctness criteria were fixed by EXP-009: top-1 equal to the CPU engine, KL below 1e-3, kernels equal
+to the CPU scalar reference within float rounding). Run 2026-10-26, RTX 5060 Laptop, CUDA 13.3; raw output `docs/research/data/bonsai_gpu_bench.log`.
+
+* Kernels (`tests/test_cuda_engine.cu`, `GroupScaledGemmMatchesCpuReference`): dp4a and tensor-core group-scaled GEMM agree with `i2k::gemm_rows_gs` (scalar) to 1e-4 relative for
+  M in {1,3,8,9,17,70}, K in {128, 2048, 6144}.
+* Model: GPU vs CPU logits on three prompts (5, 17, 115 tokens): argmax equal, KL 4e-5 .. 1.8e-4; greedy 12-token generation identical.
+  The certified int8 head produced the same 200-token greedy continuation as the exact fp16 head on 4/4 prompts (that is a sample, the proof is in `head.hpp`).
+* Speed, pp128 / tg128, 7 reps, median (min..max): fp16 head prefill 4741 (4733..4752), decode 209.6 (207.6..210.3); int8 head prefill 4874 (4848..4898), decode 251.0 (248.9..251.4).
+  The CPU engine on the same model reaches 125 / 20 tok/s (shared machine). The 621 MB fp16 head is 65% of the 952 MB weights, which is why the int8 head (-50% head bytes) gives +20% decode here.
+

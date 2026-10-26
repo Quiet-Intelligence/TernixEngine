@@ -82,10 +82,27 @@ __device__ __forceinline__ int dp4a_us(unsigned a, int b, int c) {
 
 __device__ __forceinline__ float bf16_to_f32(uint16_t b) { return __uint_as_float(static_cast<uint32_t>(b) << 16); }
 
-__global__ void embed_kernel(const uint16_t* __restrict__ emb, const int32_t* __restrict__ tokens, float* __restrict__ x, int H) {
+__device__ __forceinline__ float f16_to_f32(uint16_t h) { return __half2float(__ushort_as_half(h)); }
+__device__ __forceinline__ float wload(uint16_t b, bool f16) { return f16 ? f16_to_f32(b) : bf16_to_f32(b); }
+// eight 16-bit floats packed in four words (low half first) -> floats
+__device__ __forceinline__ void unpack8(const uint32_t* words, bool f16, float* w) {
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        if (f16) {
+            const float2 f = __half22float2(*reinterpret_cast<const __half2*>(&words[i]));
+            w[2 * i] = f.x;
+            w[2 * i + 1] = f.y;
+        } else {
+            w[2 * i] = __uint_as_float(words[i] << 16);
+            w[2 * i + 1] = __uint_as_float(words[i] & 0xffff0000u);
+        }
+    }
+}
+
+__global__ void embed_kernel(const uint16_t* __restrict__ emb, const int32_t* __restrict__ tokens, float* __restrict__ x, int H, bool f16) {
     const size_t t = blockIdx.x;
     const uint16_t* row = emb + static_cast<size_t>(tokens[t]) * H;
-    for (int i = threadIdx.x; i < H; i += blockDim.x) x[t * H + i] = bf16_to_f32(row[i]);
+    for (int i = threadIdx.x; i < H; i += blockDim.x) x[t * H + i] = wload(row[i], f16);
 }
 
 // MODE 0: v = in[i]; MODE 1: v = relu(gate[i])^2 * up[i]   (in = gate, in2 = up)
@@ -148,6 +165,77 @@ __global__ void rmsnorm_kernel(const float* __restrict__ in, const float* __rest
     for (int i = threadIdx.x; i < K; i += blockDim.x) out[t * K + i] = (in[t * K + i] * inv) * w[i];
 }
 
+// Per-128-block int8 quantisation for group-scaled architectures. PRE 0: v = in[i]; PRE 1: v = silu(in[i]) * in2[i].
+// NORM: RMSNorm with weight w before quantising. deq / sumq are indexed [token][block].
+template <int PRE, bool NORM>
+__global__ void quant_blk_kernel(const float* __restrict__ in, const float* __restrict__ in2, const float* __restrict__ w, float eps, int K,
+                                 int8_t* __restrict__ q, float* __restrict__ deq, int32_t* __restrict__ sumq) {
+    extern __shared__ float sv[];
+    __shared__ float red[32];
+    const size_t t = blockIdx.x;
+    float ss = 0.f;
+    for (int i = threadIdx.x; i < K; i += blockDim.x) {
+        float v;
+        if (PRE == 0) v = in[t * K + i];
+        else {
+            const float g = in[t * K + i];
+            v = g / (1.f + __expf(-g)) * in2[t * K + i];
+        }
+        sv[i] = v;
+        ss += v * v;
+    }
+    float inv = 1.f;
+    if (NORM) {
+        ss = block_sum(ss, red);
+        inv = 1.0f / sqrtf(ss / static_cast<float>(K) + eps);
+    }
+    __syncthreads();
+    const int nb = K / 128, warp = threadIdx.x >> 5, lane = threadIdx.x & 31, nw = blockDim.x >> 5;
+    for (int b = warp; b < nb; b += nw) {
+        float v[4];
+        float amax = 0.f;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const int i = b * 128 + lane + 32 * j;
+            float x = sv[i];
+            if (NORM) x = (x * inv) * w[i];
+            v[j] = x;
+            amax = fmaxf(amax, fabsf(x));
+        }
+        amax = fmaxf(warp_max(amax), 1e-5f);
+        const float sc = 127.0f / amax;
+        int sum = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            float r = rintf(v[j] * sc);
+            r = fminf(127.f, fmaxf(-128.f, r));
+            q[t * K + b * 128 + lane + 32 * j] = static_cast<int8_t>(static_cast<int>(r));
+            sum += static_cast<int>(r);
+        }
+        sum = warp_sum_i(sum);
+        if (lane == 0) {
+            deq[t * nb + b] = 1.0f / sc;
+            sumq[t * nb + b] = sum;
+        }
+    }
+}
+
+// Per-head RMSNorm of q (nh heads) and k (nkv heads), in place, before the rotary embedding (QK-norm). grid (tokens, nh + nkv), 128 threads.
+__global__ void qknorm_kernel(float* __restrict__ qv, float* __restrict__ kv, const float* __restrict__ qw, const float* __restrict__ kw, int nh, int nkv,
+                              int hd, float eps) {
+    __shared__ float red[32];
+    const int t = blockIdx.x, h = blockIdx.y;
+    float* v;
+    const float* w;
+    if (h < nh) { v = qv + (static_cast<size_t>(t) * nh + h) * hd; w = qw; }
+    else { v = kv + (static_cast<size_t>(t) * nkv + (h - nh)) * hd; w = kw; }
+    float ss = 0.f;
+    for (int i = threadIdx.x; i < hd; i += blockDim.x) ss += v[i] * v[i];
+    ss = block_sum(ss, red);
+    const float inv = 1.0f / sqrtf(ss / static_cast<float>(hd) + eps);
+    for (int i = threadIdx.x; i < hd; i += blockDim.x) v[i] = (v[i] * inv) * w[i];
+}
+
 // y[t][row] = (sum_k q[t][k] * W[row][k] - sum_q[t]) * deq[t] * scale   (+= when ACC)
 // W is I2K128: per 128 columns, 32 bytes, byte l holding the codes of columns 128b + 32j + l in bit pair j.
 // One warp handles 2 rows; lane i walks 16-byte chunks i, i+32, ... (a chunk is bytes 16c..16c+15 of block b).
@@ -196,6 +284,69 @@ __global__ void __launch_bounds__(128) ternary_gemv_kernel(const uint8_t* __rest
             const float f = deq[t] * scale;
             const float y0 = static_cast<float>(s0 - sumq[t]) * f;
             const float y1 = static_cast<float>(s1 - sumq[t]) * f;
+            float* o = out + static_cast<size_t>(t) * N;
+            if (ACC) { o[row0] += y0; if (row0 + 1 < N) o[row0 + 1] += y1; }
+            else { o[row0] = y0; if (row0 + 1 < N) o[row0 + 1] = y1; }
+        }
+    }
+}
+
+// Group-scaled variant: y[t][row] = sum_b gs[row][b] * deq[t][b] * (dot_b - sumq[t][b]); gs is fp16 [N][K/128]; deq / sumq are [token][K/128].
+// The two lanes that share a 128-column block each add their half of the dot product; the lane with c == 0 also subtracts the block's sum term.
+template <int NT, bool ACC>
+__global__ void __launch_bounds__(128) ternary_gemv_gs_kernel(const uint8_t* __restrict__ W, const uint16_t* __restrict__ gs, const int8_t* __restrict__ q,
+                                                              const float* __restrict__ deq, const int32_t* __restrict__ sumq, float* __restrict__ out,
+                                                              int N, int K) {
+    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
+    const int row0 = (blockIdx.x * 4 + warp) * 2;
+    if (row0 >= N) return;
+    const int row1 = (row0 + 1 < N) ? row0 + 1 : row0;
+    const int nchunks = K / 64, nb = K / 128;
+    const uint8_t* w0 = W + static_cast<size_t>(row0) * (K / 4);
+    const uint8_t* w1 = W + static_cast<size_t>(row1) * (K / 4);
+    float acc0[NT], acc1[NT];
+#pragma unroll
+    for (int t = 0; t < NT; ++t) acc0[t] = acc1[t] = 0.f;
+    for (int cidx = lane; cidx < nchunks; cidx += 32) {
+        const uint4 a = __ldcs(reinterpret_cast<const uint4*>(w0) + cidx);
+        const uint4 b = __ldcs(reinterpret_cast<const uint4*>(w1) + cidx);
+        const int blk = cidx >> 1, c = cidx & 1;
+        const int base = blk * 128 + c * 16;
+        const float s0 = f16_to_f32(gs[static_cast<size_t>(row0) * nb + blk]);
+        const float s1 = f16_to_f32(gs[static_cast<size_t>(row1) * nb + blk]);
+#pragma unroll
+        for (int t = 0; t < NT; ++t) {
+            const int8_t* qt = q + static_cast<size_t>(t) * K + base;
+            int d0 = 0, d1 = 0;
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                const uint4 av = *reinterpret_cast<const uint4*>(qt + 32 * j);
+                const int sh = 2 * j;
+                const unsigned m = 0x03030303u;
+                d0 = dp4a_us((a.x >> sh) & m, static_cast<int>(av.x), d0);
+                d0 = dp4a_us((a.y >> sh) & m, static_cast<int>(av.y), d0);
+                d0 = dp4a_us((a.z >> sh) & m, static_cast<int>(av.z), d0);
+                d0 = dp4a_us((a.w >> sh) & m, static_cast<int>(av.w), d0);
+                d1 = dp4a_us((b.x >> sh) & m, static_cast<int>(av.x), d1);
+                d1 = dp4a_us((b.y >> sh) & m, static_cast<int>(av.y), d1);
+                d1 = dp4a_us((b.z >> sh) & m, static_cast<int>(av.z), d1);
+                d1 = dp4a_us((b.w >> sh) & m, static_cast<int>(av.w), d1);
+            }
+            const float dq = deq[static_cast<size_t>(t) * nb + blk];
+            acc0[t] += s0 * dq * static_cast<float>(d0);
+            acc1[t] += s1 * dq * static_cast<float>(d1);
+            if (c == 0) {
+                const float cs = dq * static_cast<float>(sumq[static_cast<size_t>(t) * nb + blk]);
+                acc0[t] -= s0 * cs;
+                acc1[t] -= s1 * cs;
+            }
+        }
+    }
+#pragma unroll
+    for (int t = 0; t < NT; ++t) {
+        const float y0 = warp_sum(acc0[t]);
+        const float y1 = warp_sum(acc1[t]);
+        if (lane == 0) {
             float* o = out + static_cast<size_t>(t) * N;
             if (ACC) { o[row0] += y0; if (row0 + 1 < N) o[row0 + 1] += y1; }
             else { o[row0] = y0; if (row0 + 1 < N) o[row0 + 1] = y1; }
@@ -374,7 +525,7 @@ __global__ void attention_combine_kernel(const float* __restrict__ partial, floa
 // logits[t][v] = dot(emb[v], x[t]); one warp per vocabulary row.
 template <int NT>
 __global__ void __launch_bounds__(256) lm_head_kernel(const uint16_t* __restrict__ emb, const float* __restrict__ x, float* __restrict__ logits,
-                                                      int V, int H) {
+                                                      int V, int H, bool f16) {
     const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
     const int v = blockIdx.x * 8 + warp;
     if (v >= V) return;
@@ -386,11 +537,7 @@ __global__ void __launch_bounds__(256) lm_head_kernel(const uint16_t* __restrict
         const uint4 r = __ldcs(row + c);
         const uint32_t words[4] = {r.x, r.y, r.z, r.w};
         float w[8];
-#pragma unroll
-        for (int i = 0; i < 4; ++i) {
-            w[2 * i] = __uint_as_float(words[i] << 16);
-            w[2 * i + 1] = __uint_as_float(words[i] & 0xffff0000u);
-        }
+        unpack8(words, f16, w);
 #pragma unroll
         for (int t = 0; t < NT; ++t) {
             const float4 x0 = *reinterpret_cast<const float4*>(x + static_cast<size_t>(t) * H + c * 8);
@@ -457,17 +604,18 @@ __global__ void nll_kernel(const float* __restrict__ logits, const int32_t* __re
 }
 
 // ---- certified-exact int8 head (see include/ternix/head.hpp): per-row int8 copy, scale and residual norm -----------------------
-__global__ void head_quant_kernel(const uint16_t* __restrict__ emb, int H, int8_t* __restrict__ q, float* __restrict__ scale, float* __restrict__ resid) {
+__global__ void head_quant_kernel(const uint16_t* __restrict__ emb, int H, int8_t* __restrict__ q, float* __restrict__ scale, float* __restrict__ resid,
+                                  bool f16) {
     __shared__ float red[32];
     const size_t v = blockIdx.x;
     const uint16_t* row = emb + v * H;
     float amax = 0.f;
-    for (int i = threadIdx.x; i < H; i += blockDim.x) amax = fmaxf(amax, fabsf(bf16_to_f32(row[i])));
+    for (int i = threadIdx.x; i < H; i += blockDim.x) amax = fmaxf(amax, fabsf(wload(row[i], f16)));
     amax = block_max(amax, red);
     const float s = amax > 0.f ? amax / 127.f : 1.f;
     float r2 = 0.f;
     for (int i = threadIdx.x; i < H; i += blockDim.x) {
-        const float e = bf16_to_f32(row[i]);
+        const float e = wload(row[i], f16);
         const int qi = max(-127, min(127, __float2int_rn(e / s)));
         q[v * H + i] = static_cast<int8_t>(qi);
         const float d = e - static_cast<float>(qi) * s;
@@ -541,7 +689,7 @@ __global__ void head_cands_kernel(const float* __restrict__ logits, const float*
 
 // exact bf16 dot for each candidate (warp per candidate), written over the approximate logit
 __global__ void __launch_bounds__(256) head_rescore_kernel(const uint16_t* __restrict__ emb, const float* __restrict__ x, const int* __restrict__ ncand,
-                                                           const int* __restrict__ cand, float* __restrict__ logits, int H, int cap) {
+                                                           const int* __restrict__ cand, float* __restrict__ logits, int H, int cap, bool f16) {
     const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31;
     const int i = blockIdx.x * 8 + warp;
     const int n = min(*ncand, cap);
@@ -554,9 +702,9 @@ __global__ void __launch_bounds__(256) head_rescore_kernel(const uint16_t* __res
         const uint32_t words[4] = {r.x, r.y, r.z, r.w};
         const float4 x0 = *reinterpret_cast<const float4*>(x + c * 8);
         const float4 x1 = *reinterpret_cast<const float4*>(x + c * 8 + 4);
-        acc += __uint_as_float(words[0] << 16) * x0.x + __uint_as_float(words[0] & 0xffff0000u) * x0.y + __uint_as_float(words[1] << 16) * x0.z +
-               __uint_as_float(words[1] & 0xffff0000u) * x0.w + __uint_as_float(words[2] << 16) * x1.x + __uint_as_float(words[2] & 0xffff0000u) * x1.y +
-               __uint_as_float(words[3] << 16) * x1.z + __uint_as_float(words[3] & 0xffff0000u) * x1.w;
+        float w[8];
+        unpack8(words, f16, w);
+        acc += w[0] * x0.x + w[1] * x0.y + w[2] * x0.z + w[3] * x0.w + w[4] * x1.x + w[5] * x1.y + w[6] * x1.z + w[7] * x1.w;
     }
     acc = warp_sum(acc);
     if (lane == 0) logits[v] = acc;
@@ -632,6 +780,92 @@ __global__ void __launch_bounds__(128) ternary_mma_kernel(const uint8_t* __restr
         }
 }
 
+// Group-scaled tensor-core variant: the int32 accumulators are folded into float after every 128-column block, with that block's
+// weight-group scale and activation scale: facc += gs[col][b] * deq[row][b] * (acc - sumq[row][b]).
+template <int MT, bool ACC>
+__global__ void __launch_bounds__(128) ternary_mma_gs_kernel(const uint8_t* __restrict__ Wtc, const uint16_t* __restrict__ gs, const int8_t* __restrict__ q,
+                                                             const float* __restrict__ deq, const int32_t* __restrict__ sumq, float* __restrict__ out,
+                                                             int M, int N, int K) {
+    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31, g = lane >> 2, t = lane & 3;
+    const int n0 = blockIdx.x * 64 + warp * 16;
+    const int m0 = blockIdx.y * (16 * MT);
+    const int nb = K / 128;
+    float facc[MT][2][4];
+#pragma unroll
+    for (int a = 0; a < MT; ++a)
+#pragma unroll
+        for (int b = 0; b < 2; ++b)
+#pragma unroll
+            for (int c = 0; c < 4; ++c) facc[a][b][c] = 0.f;
+    const size_t rb = static_cast<size_t>(K) / 4;
+    const uint8_t* wrow[2] = {Wtc + static_cast<size_t>(n0 + g) * rb, Wtc + static_cast<size_t>(n0 + 8 + g) * rb};
+    for (int b = 0; b < nb; ++b) {
+        uint2 wv[2];
+        wv[0] = __ldcs(reinterpret_cast<const uint2*>(wrow[0] + 32 * b + 8 * t));
+        wv[1] = __ldcs(reinterpret_cast<const uint2*>(wrow[1] + 32 * b + 8 * t));
+        int acc[MT][2][4];
+#pragma unroll
+        for (int a = 0; a < MT; ++a)
+#pragma unroll
+            for (int nt = 0; nt < 2; ++nt)
+#pragma unroll
+                for (int c = 0; c < 4; ++c) acc[a][nt][c] = 0;
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            unsigned bb[2][2];
+#pragma unroll
+            for (int nt = 0; nt < 2; ++nt) {
+                bb[nt][0] = (wv[nt].x >> (2 * j)) & 0x03030303u;
+                bb[nt][1] = (wv[nt].y >> (2 * j)) & 0x03030303u;
+            }
+#pragma unroll
+            for (int mt = 0; mt < MT; ++mt) {
+                const int r0 = min(m0 + mt * 16 + g, M - 1), r1 = min(m0 + mt * 16 + g + 8, M - 1);
+                const int8_t* p0 = q + static_cast<size_t>(r0) * K + 128 * b + 32 * j + 4 * t;
+                const int8_t* p1 = q + static_cast<size_t>(r1) * K + 128 * b + 32 * j + 4 * t;
+                const unsigned a0 = *reinterpret_cast<const unsigned*>(p0), a1 = *reinterpret_cast<const unsigned*>(p1);
+                const unsigned a2 = *reinterpret_cast<const unsigned*>(p0 + 16), a3 = *reinterpret_cast<const unsigned*>(p1 + 16);
+#pragma unroll
+                for (int nt = 0; nt < 2; ++nt) mma_s8(acc[mt][nt][0], acc[mt][nt][1], acc[mt][nt][2], acc[mt][nt][3], a0, a1, a2, a3, bb[nt][0], bb[nt][1]);
+            }
+        }
+        float sc[2][2];
+#pragma unroll
+        for (int nt = 0; nt < 2; ++nt) {
+            const int col = n0 + nt * 8 + 2 * t;
+            sc[nt][0] = f16_to_f32(gs[static_cast<size_t>(col) * nb + b]);
+            sc[nt][1] = f16_to_f32(gs[static_cast<size_t>(col + 1) * nb + b]);
+        }
+#pragma unroll
+        for (int mt = 0; mt < MT; ++mt) {
+            const int rA = min(m0 + mt * 16 + g, M - 1), rB = min(m0 + mt * 16 + g + 8, M - 1);
+            const float dA = deq[static_cast<size_t>(rA) * nb + b], dB = deq[static_cast<size_t>(rB) * nb + b];
+            const int qA = sumq[static_cast<size_t>(rA) * nb + b], qB = sumq[static_cast<size_t>(rB) * nb + b];
+#pragma unroll
+            for (int nt = 0; nt < 2; ++nt) {
+                facc[mt][nt][0] += sc[nt][0] * dA * static_cast<float>(acc[mt][nt][0] - qA);
+                facc[mt][nt][1] += sc[nt][1] * dA * static_cast<float>(acc[mt][nt][1] - qA);
+                facc[mt][nt][2] += sc[nt][0] * dB * static_cast<float>(acc[mt][nt][2] - qB);
+                facc[mt][nt][3] += sc[nt][1] * dB * static_cast<float>(acc[mt][nt][3] - qB);
+            }
+        }
+    }
+#pragma unroll
+    for (int mt = 0; mt < MT; ++mt)
+#pragma unroll
+        for (int nt = 0; nt < 2; ++nt) {
+            const int rowA = m0 + mt * 16 + g, rowB = rowA + 8, col = n0 + nt * 8 + 2 * t;
+            if (rowA < M) {
+                float* o = out + static_cast<size_t>(rowA) * N + col;
+                if (ACC) { o[0] += facc[mt][nt][0]; o[1] += facc[mt][nt][1]; } else { o[0] = facc[mt][nt][0]; o[1] = facc[mt][nt][1]; }
+            }
+            if (rowB < M) {
+                float* o = out + static_cast<size_t>(rowB) * N + col;
+                if (ACC) { o[0] += facc[mt][nt][2]; o[1] += facc[mt][nt][3]; } else { o[0] = facc[mt][nt][2]; o[1] = facc[mt][nt][3]; }
+            }
+        }
+}
+
 // host: byte permutation of an I2K128 matrix into the tensor-core order (see above)
 static void permute_for_mma(const uint8_t* src, uint8_t* dst, size_t N, size_t K) {
     const size_t nb = N * K / 128;
@@ -649,12 +883,14 @@ static void permute_for_mma(const uint8_t* src, uint8_t* dst, size_t N, size_t K
 struct DevLinear {
     const uint8_t* w = nullptr;
     const uint8_t* wtc = nullptr;   // tensor-core ordered copy
+    const uint16_t* gs = nullptr;   // fp16 group scales [N][K/128] (group-scaled architectures), else nullptr
     int N = 0, K = 0;
     float scale = 1.f;
 };
 struct DevLayer {
     DevLinear q, k, v, o, gate, up, down;
     const float *in_norm, *post_norm, *attn_sub, *ffn_sub;
+    const float *q_norm = nullptr, *k_norm = nullptr;
 };
 
 } // namespace
@@ -666,6 +902,7 @@ struct CudaModel::Impl {
     size_t bytes = 0;
     std::vector<void*> allocs;
     const uint16_t* emb = nullptr;
+    bool f16emb = false;
     const float* final_norm = nullptr;
     float* att_partial = nullptr;
     int att_splits = 1;
@@ -698,7 +935,7 @@ struct CudaModel::Impl {
     }
 
     explicit Impl(const ModelFile& f, int ctx_len) : file(f), cfg(f.config()), max_ctx(std::min<int>(ctx_len, static_cast<int>(f.config().max_pos))) {
-        if (cfg.arch != 1) throw std::runtime_error("cuda engine: only the BitNet architecture is implemented (architecture 2 runs on the CPU engine)");
+        if (cfg.arch != 1 && cfg.arch != 2) throw std::runtime_error("cuda engine: unknown architecture");
         if (cfg.head_dim > 256 || cfg.head_dim % 32 != 0) throw std::runtime_error("cuda engine: unsupported head_dim");
         CK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
         CK(cudaMallocHost(reinterpret_cast<void**>(&h_tokens), CudaModel::kMaxChunk * 4));
@@ -734,11 +971,16 @@ struct CudaModel::Impl {
             l.N = static_cast<int>(t.dims[0]);
             l.K = static_cast<int>(t.dims[1]);
             l.scale = t.scale;
+            if (const TensorView* g = f.find(name + ".gscale")) {
+                l.gs = static_cast<const uint16_t*>(up_bytes(g->data, g->nbytes));
+                l.scale = 1.f;
+            }
             return l;
         };
         auto norm = [&](const std::string& name) { const TensorView& t = f.get(name); return static_cast<const float*>(up_bytes(t.data, t.nbytes)); };
         const TensorView& e = f.get("model.embed_tokens.weight");
         emb = static_cast<const uint16_t*>(up_bytes(e.data, e.nbytes));
+        f16emb = e.dtype == DType::F16;
         final_norm = norm("model.norm.weight");
         for (uint32_t l = 0; l < cfg.layers; ++l) {
             const std::string p = "model.layers." + std::to_string(l) + ".";
@@ -747,22 +989,31 @@ struct CudaModel::Impl {
             L.v = lin(p + "self_attn.v_proj.weight"); L.o = lin(p + "self_attn.o_proj.weight");
             L.gate = lin(p + "mlp.gate_proj.weight"); L.up = lin(p + "mlp.up_proj.weight"); L.down = lin(p + "mlp.down_proj.weight");
             L.in_norm = norm(p + "input_layernorm.weight"); L.post_norm = norm(p + "post_attention_layernorm.weight");
-            L.attn_sub = norm(p + "self_attn.attn_sub_norm.weight"); L.ffn_sub = norm(p + "mlp.ffn_sub_norm.weight");
+            if (cfg.subln) { L.attn_sub = norm(p + "self_attn.attn_sub_norm.weight"); L.ffn_sub = norm(p + "mlp.ffn_sub_norm.weight"); }
+            else { L.attn_sub = nullptr; L.ffn_sub = nullptr; }
+            if (cfg.qk_norm) { L.q_norm = norm(p + "self_attn.q_norm.weight"); L.k_norm = norm(p + "self_attn.k_norm.weight"); }
             layers.push_back(L);
         }
         x = (float*)alloc(B * H * 4); xn = (float*)alloc(B * H * 4); q = (float*)alloc(B * qdim * 4);
         k = (float*)alloc(B * kvdim * 4); v = (float*)alloc(B * kvdim * 4); ctx = (float*)alloc(B * qdim * 4);
         gate = (float*)alloc(B * F * 4); up = (float*)alloc(B * F * 4); tmpf = (float*)alloc(B * H * 4);
         logits = (float*)alloc(B * size_t(cfg.vocab) * 4);
-        q8 = (int8_t*)alloc(B * std::max(H, F)); deq = (float*)alloc(B * 4); sumq = (int32_t*)alloc(B * 4);
+        const size_t kmax = std::max({H, F, qdim});
+        q8 = (int8_t*)alloc(B * kmax); deq = (float*)alloc(B * (kmax / 128) * 4); sumq = (int32_t*)alloc(B * (kmax / 128) * 4);   // per token, or per (token, 128-block)
         d_tokens = (int32_t*)alloc(B * 4); d_argmax = (int32_t*)alloc(4); d_pos = (int32_t*)alloc(4);
         const size_t half = hd / 2;
         std::vector<float> ct(size_t(max_ctx) * half), st(size_t(max_ctx) * half);
+        std::vector<double> inv_freq(half);
+        if (const TensorView* t = f.find("rope.inv_freq")) {   // precomputed by the converter (YaRN); same tables as the CPU engine
+            const float* fr = reinterpret_cast<const float*>(t->data);
+            for (size_t i = 0; i < half; ++i) inv_freq[i] = fr[i];
+        } else {
+            for (size_t i = 0; i < half; ++i) inv_freq[i] = std::pow(static_cast<double>(cfg.rope_theta), -2.0 * static_cast<double>(i) / static_cast<double>(hd));
+        }
         for (int p = 0; p < max_ctx; ++p)
             for (size_t i = 0; i < half; ++i) {
-                const double freq = std::pow(static_cast<double>(cfg.rope_theta), -2.0 * static_cast<double>(i) / static_cast<double>(hd));
-                ct[size_t(p) * half + i] = static_cast<float>(std::cos(p * freq));
-                st[size_t(p) * half + i] = static_cast<float>(std::sin(p * freq));
+                ct[size_t(p) * half + i] = static_cast<float>(std::cos(p * inv_freq[i]) * cfg.rope_attn_factor);
+                st[size_t(p) * half + i] = static_cast<float>(std::sin(p * inv_freq[i]) * cfg.rope_attn_factor);
             }
         cos_t = (float*)up_bytes(ct.data(), ct.size() * 4);
         sin_t = (float*)up_bytes(st.data(), st.size() * 4);
@@ -796,7 +1047,7 @@ struct CudaModel::Impl {
         hscale = static_cast<float*>(alloc(V * 4)); hresid = static_cast<float*>(alloc(V * 4)); hlower = static_cast<float*>(alloc(V * 4));
         hnorm = static_cast<float*>(alloc(4)); hL = static_cast<float*>(alloc(4)); hncand = static_cast<int*>(alloc(4));
         hcand = static_cast<int*>(alloc(size_t(kCandCap) * 4));
-        head_quant_kernel<<<static_cast<unsigned>(V), 256>>>(emb, static_cast<int>(H), hq8, hscale, hresid);
+        head_quant_kernel<<<static_cast<unsigned>(V), 256>>>(emb, static_cast<int>(H), hq8, hscale, hresid, f16emb);
         CK(cudaGetLastError());
         CK(cudaDeviceSynchronize());
         head8 = true;
@@ -810,11 +1061,12 @@ struct CudaModel::Impl {
         head_score_kernel<<<(V + 7) / 8, 256, 0, stream>>>(hq8, hscale, hresid, xin, hnorm, logits, hlower, V, H);
         head_maxlb_kernel<<<1, 1024, 0, stream>>>(hlower, V, hL, hncand);
         head_cands_kernel<<<(V + 255) / 256, 256, 0, stream>>>(logits, hresid, hnorm, hL, V, hncand, hcand, kCandCap);
-        head_rescore_kernel<<<kCandCap / 8, 256, 0, stream>>>(emb, xin, hncand, hcand, logits, H, kCandCap);
+        head_rescore_kernel<<<kCandCap / 8, 256, 0, stream>>>(emb, xin, hncand, hcand, logits, H, kCandCap, f16emb);
     }
 
     bool use_mma = true;
     void gemv(const DevLinear& L, int n, float* out, bool acc) {
+        if (L.gs) { gemv_gs(L, n, out, acc); return; }
         if (use_mma && n > 8 && L.N % 64 == 0 && L.K % 128 == 0) {
             const int MT = std::min(4, (n + 15) / 16);
             const dim3 grid(L.N / 64, (n + 16 * MT - 1) / (16 * MT)), block(128);
@@ -842,12 +1094,42 @@ struct CudaModel::Impl {
         }
     }
 
+    // group-scaled linear: activations were quantised per 128-column block (deq / sumq are [token][K/128])
+    void gemv_gs(const DevLinear& L, int n, float* out, bool acc) {
+        const size_t nb = L.K / 128;
+        if (use_mma && n > 8 && L.N % 64 == 0 && L.K % 128 == 0) {
+            const int MT = std::min(4, (n + 15) / 16);
+            const dim3 grid(L.N / 64, (n + 16 * MT - 1) / (16 * MT)), block(128);
+#define MMA(M_T)                                                                                                                  \
+    case M_T:                                                                                                                      \
+        if (acc) ternary_mma_gs_kernel<M_T, true><<<grid, block, 0, stream>>>(L.wtc, L.gs, q8, deq, sumq, out, n, L.N, L.K);       \
+        else ternary_mma_gs_kernel<M_T, false><<<grid, block, 0, stream>>>(L.wtc, L.gs, q8, deq, sumq, out, n, L.N, L.K);          \
+        break;
+            switch (MT) { MMA(1) MMA(2) MMA(3) MMA(4) }
+#undef MMA
+            return;
+        }
+        for (int t0 = 0; t0 < n; t0 += 8) {
+            const int nt = std::min(8, n - t0);
+            const dim3 grid((L.N + 7) / 8), block(128);
+            const int8_t* qa = q8 + size_t(t0) * L.K;
+            float* o = out + size_t(t0) * L.N;
+#define LAUNCH(NT)                                                                                                                 \
+    case NT:                                                                                                                       \
+        if (acc) ternary_gemv_gs_kernel<NT, true><<<grid, block, 0, stream>>>(L.w, L.gs, qa, deq + t0 * nb, sumq + t0 * nb, o, L.N, L.K); \
+        else ternary_gemv_gs_kernel<NT, false><<<grid, block, 0, stream>>>(L.w, L.gs, qa, deq + t0 * nb, sumq + t0 * nb, o, L.N, L.K);    \
+        break;
+            switch (nt) { LAUNCH(1) LAUNCH(2) LAUNCH(3) LAUNCH(4) LAUNCH(5) LAUNCH(6) LAUNCH(7) LAUNCH(8) }
+#undef LAUNCH
+        }
+    }
+
     void head(const float* xin, int n) {
         const int H = static_cast<int>(cfg.hidden), V = static_cast<int>(cfg.vocab);
         for (int t0 = 0; t0 < n; t0 += 8) {
             const int nt = std::min(8, n - t0);
             const dim3 grid((V + 7) / 8), block(256);
-#define LAUNCH(NT) case NT: lm_head_kernel<NT><<<grid, block, 0, stream>>>(emb, xin + size_t(t0) * H, logits + size_t(t0) * V, V, H); break;
+#define LAUNCH(NT) case NT: lm_head_kernel<NT><<<grid, block, 0, stream>>>(emb, xin + size_t(t0) * H, logits + size_t(t0) * V, V, H, f16emb); break;
             switch (nt) { LAUNCH(1) LAUNCH(2) LAUNCH(3) LAUNCH(4) LAUNCH(5) LAUNCH(6) LAUNCH(7) LAUNCH(8) }
 #undef LAUNCH
         }
@@ -860,12 +1142,37 @@ struct CudaModel::Impl {
         const int nh = static_cast<int>(cfg.heads), nkv = static_cast<int>(cfg.kv_heads);
         const int qdim = nh * hd;
         const float eps = cfg.rms_eps;
-        embed_kernel<<<n, 256, 0, stream>>>(emb, d_tokens, x, H);
+        embed_kernel<<<n, 256, 0, stream>>>(emb, d_tokens, x, H, f16emb);
         const int rn_threads = 512;
         const size_t attn_smem = (size_t(max_ctx) + hd) * 4;
         const float scale = 1.0f / std::sqrt(static_cast<float>(hd));
         for (uint32_t l = 0; l < cfg.layers; ++l) {
             const DevLayer& L = layers[l];
+            if (cfg.arch == 2) {
+                const int Fh = F;
+                quant_blk_kernel<0, true><<<n, 256, size_t(H) * 4, stream>>>(x, nullptr, L.in_norm, eps, H, q8, deq, sumq);
+                gemv(L.q, n, q, false);
+                gemv(L.k, n, k, false);
+                gemv(L.v, n, v, false);
+                if (cfg.qk_norm) qknorm_kernel<<<dim3(n, nh + nkv), 128, 0, stream>>>(q, k, L.q_norm, L.k_norm, nh, nkv, hd, eps);
+                uint16_t* kcl2 = kc + size_t(l) * nkv * max_ctx * hd;
+                uint16_t* vcl2 = vc + size_t(l) * nkv * max_ctx * hd;
+                rope_append_kernel<<<dim3(n, nh + nkv), 64, 0, stream>>>(q, k, v, cos_t, sin_t, kcl2, vcl2, nh, nkv, hd, max_ctx, d_pos);
+                if (n == 1) {
+                    attention_split_kernel<<<dim3(nh, att_splits), 128, 0, stream>>>(q, kcl2, vcl2, att_partial, nh, nkv, hd, max_ctx, att_splits, d_pos, scale);
+                    attention_combine_kernel<<<nh, hd, 0, stream>>>(att_partial, ctx, hd, att_splits);
+                } else {
+                    attention_kernel<<<dim3(n, nh), hd, attn_smem, stream>>>(q, kcl2, vcl2, ctx, nh, nkv, hd, max_ctx, d_pos, scale);
+                }
+                quant_blk_kernel<0, false><<<n, 256, size_t(qdim) * 4, stream>>>(ctx, nullptr, nullptr, eps, qdim, q8, deq, sumq);
+                gemv(L.o, n, x, true);
+                quant_blk_kernel<0, true><<<n, 256, size_t(H) * 4, stream>>>(x, nullptr, L.post_norm, eps, H, q8, deq, sumq);
+                gemv(L.gate, n, gate, false);
+                gemv(L.up, n, up, false);
+                quant_blk_kernel<1, false><<<n, 256, size_t(Fh) * 4, stream>>>(gate, up, nullptr, eps, Fh, q8, deq, sumq);
+                gemv(L.down, n, x, true);
+                continue;
+            }
             rmsnorm_quant_kernel<0><<<n, rn_threads, size_t(H) * 4, stream>>>(x, nullptr, L.in_norm, eps, H, nullptr, q8, deq, sumq);
             gemv(L.q, n, q, false);
             gemv(L.k, n, k, false);
@@ -1086,6 +1393,43 @@ void cuda_test_ternary_mma(const uint8_t* W, const int8_t* q, const float* deq, 
     CK(cudaGetLastError());
     CK(cudaMemcpy(y, dy, size_t(M) * N * 4, cudaMemcpyDeviceToHost));
     cudaFree(dW); cudaFree(dq); cudaFree(dd); cudaFree(ds); cudaFree(dy);
+}
+
+} // namespace ternix
+
+namespace ternix {
+
+// group-scaled GEMM test hook: act_block quantised activations (deq / sumq are [M][K/128]), fp16 group scales gs [N][K/128]; tc selects the tensor-core kernel
+void cuda_test_ternary_gs(const uint8_t* W, const uint16_t* gs, const int8_t* q, const float* deq, const int32_t* sumq, float* y, int M, int N, int K, bool tc) {
+    const int nb = K / 128;
+    std::vector<uint8_t> perm(size_t(N) * K / 4);
+    permute_for_mma(W, perm.data(), N, K);
+    uint8_t *dW, *dWp; uint16_t* dg; int8_t* dq; float *dd, *dy; int32_t* ds;
+    const int rows = std::max(M, 64);
+    CK(cudaMalloc(&dW, perm.size())); CK(cudaMalloc(&dWp, perm.size())); CK(cudaMalloc(&dg, size_t(N) * nb * 2)); CK(cudaMalloc(&dq, size_t(rows) * K));
+    CK(cudaMalloc(&dd, size_t(rows) * nb * 4)); CK(cudaMalloc(&ds, size_t(rows) * nb * 4)); CK(cudaMalloc(&dy, size_t(rows) * N * 4));
+    CK(cudaMemset(dq, 0, size_t(rows) * K)); CK(cudaMemset(dd, 0, size_t(rows) * nb * 4)); CK(cudaMemset(ds, 0, size_t(rows) * nb * 4));
+    CK(cudaMemcpy(dW, W, perm.size(), cudaMemcpyHostToDevice)); CK(cudaMemcpy(dWp, perm.data(), perm.size(), cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(dg, gs, size_t(N) * nb * 2, cudaMemcpyHostToDevice)); CK(cudaMemcpy(dq, q, size_t(M) * K, cudaMemcpyHostToDevice));
+    CK(cudaMemcpy(dd, deq, size_t(M) * nb * 4, cudaMemcpyHostToDevice)); CK(cudaMemcpy(ds, sumq, size_t(M) * nb * 4, cudaMemcpyHostToDevice));
+    if (tc) {
+        const int MT = std::min(4, (M + 15) / 16);
+        const dim3 grid(N / 64, (M + 16 * MT - 1) / (16 * MT)), block(128);
+#define MMA(M_T) case M_T: ternary_mma_gs_kernel<M_T, false><<<grid, block>>>(dWp, dg, dq, dd, ds, dy, M, N, K); break;
+        switch (MT) { MMA(1) MMA(2) MMA(3) MMA(4) default: throw std::runtime_error("M"); }
+#undef MMA
+    } else {
+        for (int t0 = 0; t0 < M; t0 += 8) {
+            const int nt = std::min(8, M - t0);
+            const dim3 grid((N + 7) / 8), block(128);
+#define LAUNCH(NT) case NT: ternary_gemv_gs_kernel<NT, false><<<grid, block>>>(dW, dg, dq + size_t(t0) * K, dd + size_t(t0) * nb, ds + size_t(t0) * nb, dy + size_t(t0) * N, N, K); break;
+            switch (nt) { LAUNCH(1) LAUNCH(2) LAUNCH(3) LAUNCH(4) LAUNCH(5) LAUNCH(6) LAUNCH(7) LAUNCH(8) default: throw std::runtime_error("nt"); }
+#undef LAUNCH
+        }
+    }
+    CK(cudaGetLastError());
+    CK(cudaMemcpy(y, dy, size_t(M) * N * 4, cudaMemcpyDeviceToHost));
+    cudaFree(dW); cudaFree(dWp); cudaFree(dg); cudaFree(dq); cudaFree(dd); cudaFree(ds); cudaFree(dy);
 }
 
 } // namespace ternix

@@ -92,3 +92,31 @@ TEST(CudaEngine, TensorCoreGemmMatchesCpuKernelExactly) {
             }
         }
 }
+
+// Group-scaled GEMM (arch 2): dp4a and tensor-core kernels against the CPU scalar reference on per-128-block quantised activations.
+TEST(CudaEngine, GroupScaledGemmMatchesCpuReference) {
+    std::mt19937 rng(23);
+    std::normal_distribution<float> nd(0.f, 1.5f);
+    for (bool tc : {false, true})
+        for (int M : {1, 3, 8, 9, 17, 70})
+            for (auto [N, K] : {std::pair<int, int>{64, 128}, {128, 2048}, {192, 6144}}) {
+                std::vector<int8_t> w(size_t(N) * K);
+                for (auto& v : w) v = static_cast<int8_t>(int(rng() % 3) - 1);
+                std::vector<uint8_t> wp(size_t(N) * K / 4);
+                i2k::pack(w.data(), wp.data(), N, K);
+                const int nb = K / 128;
+                std::vector<uint16_t> gs(size_t(N) * nb);
+                for (auto& g : gs) g = static_cast<uint16_t>(0x2c00 + (rng() % 0x400));   // fp16 in [2^-4, 2^-3)
+                std::vector<float> x(size_t(M) * K);
+                for (auto& v : x) v = nd(rng);
+                std::vector<int8_t> q(size_t(M) * K);
+                std::vector<float> deq(size_t(M) * nb);
+                std::vector<int32_t> sumq(size_t(M) * nb);
+                for (int t = 0; t < M; ++t) i2k::quantize_act_blocks(x.data() + size_t(t) * K, q.data() + size_t(t) * K, K, deq.data() + size_t(t) * nb, sumq.data() + size_t(t) * nb, Isa::Scalar);
+                std::vector<float> y(size_t(M) * N), ref(size_t(M) * N);
+                cuda_test_ternary_gs(wp.data(), gs.data(), q.data(), deq.data(), sumq.data(), y.data(), M, N, K, tc);
+                i2k::gemm_rows_gs(wp.data(), gs.data(), q.data(), deq.data(), sumq.data(), size_t(M), ref.data(), size_t(N), 0, size_t(N), size_t(K), Isa::Scalar);
+                for (size_t i = 0; i < y.size(); ++i)
+                    ASSERT_NEAR(y[i], ref[i], 1e-4f * (1.f + std::fabs(ref[i]))) << "tc=" << tc << " M=" << M << " N=" << N << " K=" << K << " i=" << i;
+            }
+}

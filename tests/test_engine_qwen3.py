@@ -39,3 +39,30 @@ def test_nll_matches_logits(eng):
     expect = -(lg[ids[-1]] - np.log(np.exp(lg).sum()))
     nll, _ = eng.nll(ids[:-1], ids[1:])
     assert abs(float(np.asarray(nll)[-1]) - expect) < 2e-3
+
+
+@pytest.fixture(scope="module")
+def gpu():
+    if not getattr(ternix, "has_cuda", False):
+        pytest.skip("built without CUDA")
+    return ternix.Engine(str(MODEL), gpu=True, ctx=256)
+
+
+def test_gpu_matches_cpu(eng, gpu):
+    for text in ["The capital of France is", "In 1969, Neil Armstrong became the first person to walk on the Moon. " * 5]:
+        ids = eng.encode(text, True, True)
+        a, b = eng.logits(ids), gpu.logits(ids)
+        assert a.argmax() == b.argmax()
+        la, lb = a - a.max(), b - b.max()
+        la -= np.log(np.exp(la).sum())
+        lb -= np.log(np.exp(lb).sum())
+        assert float((np.exp(la) * (la - lb)).sum()) < 1e-3
+
+
+def test_gpu_int8_head_is_exact():
+    if not getattr(ternix, "has_cuda", False):
+        pytest.skip("built without CUDA")
+    a = ternix.Engine(str(MODEL), gpu=True, ctx=256, head="bf16")
+    b = ternix.Engine(str(MODEL), gpu=True, ctx=256, head="int8")
+    for p in ["Explain how a transformer language model works.", "The history of the Roman Empire began"]:
+        assert a.generate(p, n=64) == b.generate(p, n=64)
