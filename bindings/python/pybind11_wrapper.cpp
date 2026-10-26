@@ -71,14 +71,14 @@ public:
     // Incremental interface (used by the HTTP server): prefill resets the sequence, step appends one token. Both return the
     // next-token logits.
     py::array_t<float> prefill(const std::vector<int32_t>& ids) {
-        py::array_t<float> out(static_cast<py::ssize_t>(vocab_size()));
+        py::array_t<float> out(std::vector<py::ssize_t>{static_cast<py::ssize_t>(vocab_size())});
         py::gil_scoped_release release;
         reset();
         if (!forward(ids.data(), static_cast<int>(ids.size()), out.mutable_data(), 1)) throw std::runtime_error("sequence exceeds the context window");
         return out;
     }
     py::array_t<float> step(int32_t token) {
-        py::array_t<float> out(static_cast<py::ssize_t>(vocab_size()));
+        py::array_t<float> out(std::vector<py::ssize_t>{static_cast<py::ssize_t>(vocab_size())});
         py::gil_scoped_release release;
         if (!forward(&token, 1, out.mutable_data(), 1)) throw std::runtime_error("context window full");
         return out;

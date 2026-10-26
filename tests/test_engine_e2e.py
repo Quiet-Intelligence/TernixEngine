@@ -86,3 +86,18 @@ def test_sparse_down_is_bit_identical():
         t = int(a.argmax())
         a, b = dense.step(t), sparse.step(t)
         np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("kv_int8", [False, True])
+def test_decode_step_matches_prefill(kv_int8):
+    """Incremental decode (split-chunk grouped attention) must reproduce the prefill logits of the same prefix."""
+    e = ternix.Engine(str(MODEL), gpu=False, ctx=1024, kv_int8=kv_int8)
+    text = "In 1969, Neil Armstrong became the first person to walk on the Moon. " * 8   # > 256 tokens: several attention chunks
+    ids = e.encode(text, True, True)[:300]
+    full = e.logits(ids)
+    inc = e.prefill(ids[:-1])
+    inc = e.step(ids[-1])
+    p, q = np.exp(log_softmax(full)), log_softmax(inc)
+    kl = float((p * (np.log(np.maximum(p, 1e-30)) - q)).sum())
+    assert kl < (2e-2 if kv_int8 else 5e-3), kl
+    assert full.argmax() == inc.argmax()

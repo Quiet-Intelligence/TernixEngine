@@ -1,0 +1,4 @@
+zero density 0.42 | pool threads 16
+qo 2560x2560      bitmap 1.631 bpw (zeros 0.420) | pool DRAM-rotating: i2k 48.0 us (34.1 GB/s) bitmap 59.5 us (22.5 GB/s) ratio 1.24 | 1-thread cache-resident GMAC/s: i2k 104.4 bitmap 16.8
+gateup 6912x2560  bitmap 1.631 bpw (zeros 0.420) | pool DRAM-rotating: i2k 114.5 us (38.6 GB/s) bitmap 159.5 us (22.6 GB/s) ratio 1.39 | 1-thread cache-resident GMAC/s: i2k 132.0 bitmap 16.9
+down 2560x6912    bitmap 1.599 bpw (zeros 0.420) | pool DRAM-rotating: i2k 114.0 us (38.8 GB/s) bitmap 149.1 us (23.7 GB/s) ratio 1.31 | 1-thread cache-resident GMAC/s: i2k 130.2 bitmap 16.8

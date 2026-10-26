@@ -107,6 +107,7 @@ private:
     AlignedBuf<int32_t> sumq_;
     std::vector<AlignedBuf<float>> scores_;     // per thread
     AlignedBuf<float> attn_out_;
+    AlignedBuf<float> att_part_;                 // decode attention partials [heads][chunks][head_dim + 2]
     AlignedBuf<float> rope_cos_, rope_sin_;      // [max_ctx][head_dim/2]
     AlignedBuf<uint16_t> kcache_, vcache_;       // [layer][kv_head][max_ctx][head_dim]
     bool kv_int8_ = false;

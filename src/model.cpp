@@ -71,6 +71,7 @@ Model::Model(const ModelFile& file, int threads, int max_ctx, Isa isa)
     scores_.resize(static_cast<size_t>(pool_.size()));
     for (auto& s : scores_) s.reset(static_cast<size_t>(max_ctx_) + 16);
     attn_out_.reset(B * qdim);
+    att_part_.reset(size_t(cfg_.heads) * ((size_t(max_ctx_) + ops::kAttChunk - 1) / ops::kAttChunk) * (hd + 2));
     const size_t half = hd / 2;
     rope_cos_.reset(size_t(max_ctx_) * half);
     rope_sin_.reset(size_t(max_ctx_) * half);
@@ -144,6 +145,26 @@ void Model::attention(int layer, int n) {
         }
     }
     const float scale = 1.0f / std::sqrt(static_cast<float>(hd));
+    if (n == 1 && group <= 8) {
+        // decode: split every kv head's history into chunks, share each K/V row among the query heads of the group, merge
+        const size_t len = size_t(pos0) + 1, nchunks = (len + ops::kAttChunk - 1) / ops::kAttChunk;
+        const size_t S = (size_t(max_ctx_) + ops::kAttChunk - 1) / ops::kAttChunk;
+        pool_.parallel_for(nkv * nchunks, [&](size_t task, int) {
+            const size_t g = task / nchunks, c = task % nchunks;
+            const size_t j0 = c * ops::kAttChunk, j1 = std::min(len, j0 + ops::kAttChunk);
+            float part[8 * 258];
+            if (kv_int8_) {
+                const size_t base = (size_t(layer) * nkv + g) * max_ctx_;
+                ops::attend_chunk_i8(q_.data() + g * group * hd, group, kq_.data() + base * hd, kscale_.data() + base, vq_.data() + base * hd, vscale_.data() + base, j0, j1, hd, scale, part);
+            } else {
+                ops::attend_chunk_f16(q_.data() + g * group * hd, group, kc + g * max_ctx_ * hd, vc + g * max_ctx_ * hd, j0, j1, hd, scale, part);
+            }
+            for (size_t h = 0; h < group; ++h)
+                std::memcpy(att_part_.data() + ((g * group + h) * S + c) * (hd + 2), part + h * (hd + 2), (hd + 2) * sizeof(float));
+        });
+        pool_.parallel_for(nh, [&](size_t h, int) { ops::attend_combine(att_part_.data() + h * S * (hd + 2), nchunks, hd, ctx_.data() + h * hd); });
+        return;
+    }
     pool_.parallel_for(size_t(n) * nh, [&](size_t task, int tid) {
         const size_t t = task / nh, h = task % nh, g = h / group;
         const size_t len = size_t(pos0) + t + 1;

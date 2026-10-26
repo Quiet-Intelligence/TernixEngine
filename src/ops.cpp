@@ -210,5 +210,95 @@ void attend_head_i8(const float* q, const int8_t* k, const float* k_scale, const
     for (size_t t = 0; t < nv; ++t) _mm256_storeu_ps(out + 8 * t, acc[t]);
 }
 
+namespace {
+inline __m256 load_k_f16(const uint16_t* p) { return _mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p))); }
+inline __m256 load_k_i8(const int8_t* p) { return _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(p)))); }
+
+// shared body: LoadK/LoadV decode 8 elements; kscale/vscale may be null (fp16)
+template <class T, __m256 (*Load)(const T*), size_t GS>
+void attend_chunk_impl(const float* q, const T* k, const float* ks, const T* v, const float* vs, size_t j0, size_t j1, size_t d, float scale, float* out) {
+    const size_t n = j1 - j0;
+    alignas(32) float sc[8][kAttChunk];
+    float mx[8], sum[8];
+    for (size_t j = 0; j < n; ++j) {
+        const T* kj = k + (j0 + j) * d;
+        __m256 acc[8];
+        for (size_t h = 0; h < GS; ++h) acc[h] = _mm256_setzero_ps();
+        for (size_t i = 0; i < d; i += 8) {
+            const __m256 kf = Load(kj + i);
+            for (size_t h = 0; h < GS; ++h) acc[h] = _mm256_fmadd_ps(kf, _mm256_loadu_ps(q + h * d + i), acc[h]);
+        }
+        const float ksc = ks ? ks[j0 + j] : 1.f;
+        for (size_t h = 0; h < GS; ++h) sc[h][j] = hsum(acc[h]) * scale * ksc;
+    }
+    for (size_t h = 0; h < GS; ++h) {
+        float m = -INFINITY;
+        for (size_t j = 0; j < n; ++j) m = std::max(m, sc[h][j]);
+        float l = 0.f;
+        for (size_t j = 0; j < n; ++j) {
+            sc[h][j] = std::exp(sc[h][j] - m);
+            l += sc[h][j];
+            if (vs) sc[h][j] *= vs[j0 + j];
+        }
+        mx[h] = m;
+        sum[h] = l;
+    }
+    for (size_t ib = 0; ib < d; ib += 16) {
+        __m256 a0[8], a1[8];
+        for (size_t h = 0; h < GS; ++h) a0[h] = a1[h] = _mm256_setzero_ps();
+        for (size_t j = 0; j < n; ++j) {
+            const T* vj = v + (j0 + j) * d + ib;
+            const __m256 v0 = Load(vj), v1 = Load(vj + 8);
+            for (size_t h = 0; h < GS; ++h) {
+                const __m256 p = _mm256_set1_ps(sc[h][j]);
+                a0[h] = _mm256_fmadd_ps(p, v0, a0[h]);
+                a1[h] = _mm256_fmadd_ps(p, v1, a1[h]);
+            }
+        }
+        for (size_t h = 0; h < GS; ++h) {
+            _mm256_storeu_ps(out + h * (d + 2) + 2 + ib, a0[h]);
+            _mm256_storeu_ps(out + h * (d + 2) + 2 + ib + 8, a1[h]);
+        }
+    }
+    for (size_t h = 0; h < GS; ++h) {
+        out[h * (d + 2)] = mx[h];
+        out[h * (d + 2) + 1] = sum[h];
+    }
+}
+} // namespace
+
+void attend_chunk_f16(const float* q, size_t gs, const uint16_t* k, const uint16_t* v, size_t j0, size_t j1, size_t d, float scale, float* out) {
+    switch (gs) {
+        case 1: attend_chunk_impl<uint16_t, load_k_f16, 1>(q, k, nullptr, v, nullptr, j0, j1, d, scale, out); break;
+        case 2: attend_chunk_impl<uint16_t, load_k_f16, 2>(q, k, nullptr, v, nullptr, j0, j1, d, scale, out); break;
+        case 4: attend_chunk_impl<uint16_t, load_k_f16, 4>(q, k, nullptr, v, nullptr, j0, j1, d, scale, out); break;
+        default: attend_chunk_impl<uint16_t, load_k_f16, 8>(q, k, nullptr, v, nullptr, j0, j1, d, scale, out); break;
+    }
+}
+void attend_chunk_i8(const float* q, size_t gs, const int8_t* k, const float* k_scale, const int8_t* v, const float* v_scale, size_t j0, size_t j1, size_t d,
+                     float scale, float* out) {
+    switch (gs) {
+        case 1: attend_chunk_impl<int8_t, load_k_i8, 1>(q, k, k_scale, v, v_scale, j0, j1, d, scale, out); break;
+        case 2: attend_chunk_impl<int8_t, load_k_i8, 2>(q, k, k_scale, v, v_scale, j0, j1, d, scale, out); break;
+        case 4: attend_chunk_impl<int8_t, load_k_i8, 4>(q, k, k_scale, v, v_scale, j0, j1, d, scale, out); break;
+        default: attend_chunk_impl<int8_t, load_k_i8, 8>(q, k, k_scale, v, v_scale, j0, j1, d, scale, out); break;
+    }
+}
+
+void attend_combine(const float* partial, size_t chunks, size_t d, float* out) {
+    float M = -INFINITY;
+    for (size_t c = 0; c < chunks; ++c) M = std::max(M, partial[c * (d + 2)]);
+    float L = 0.f;
+    for (size_t i = 0; i < d; ++i) out[i] = 0.f;
+    for (size_t c = 0; c < chunks; ++c) {
+        const float* p = partial + c * (d + 2);
+        const float w = std::exp(p[0] - M);
+        L += p[1] * w;
+        for (size_t i = 0; i < d; ++i) out[i] += p[2 + i] * w;
+    }
+    const float inv = 1.f / L;
+    for (size_t i = 0; i < d; ++i) out[i] *= inv;
+}
+
 } // namespace ops
 } // namespace ternix

@@ -31,6 +31,11 @@ endif()
 
 include(FetchContent)
 
+# x86-64 baseline for GCC/Clang: AVX2 + FMA + F16C + BMI2 + POPCNT; AVX-VNNI intrinsics are compiled in but only executed after a
+# runtime cpuid check (src/cpu_features.cpp).
+set(TERNIX_GNU_FLAGS $<$<COMPILE_LANGUAGE:CXX>:-mavx2> $<$<COMPILE_LANGUAGE:CXX>:-mfma> $<$<COMPILE_LANGUAGE:CXX>:-mf16c> $<$<COMPILE_LANGUAGE:CXX>:-mbmi2>
+    $<$<COMPILE_LANGUAGE:CXX>:-mpopcnt> $<$<COMPILE_LANGUAGE:CXX>:-mavxvnni> $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+
 # Google Benchmark
 FetchContent_Declare(
   benchmark
@@ -80,7 +85,7 @@ endif()
 
 add_library(ternix_core STATIC ${TERNIX_SOURCES})
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    set_source_files_properties(src/i2k.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mavxvnni")
+    
 endif()
 set_target_properties(ternix_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(TERNIX_HAS_CUDA)
@@ -93,7 +98,7 @@ if(TERNIX_HAS_CUDA)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(ternix_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mavx2> $<$<COMPILE_LANGUAGE:CXX>:-mfma> $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+    target_compile_options(ternix_core PRIVATE ${TERNIX_GNU_FLAGS})
 elseif(MSVC)
     target_compile_options(ternix_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2> $<$<COMPILE_LANGUAGE:CXX>:/O2>)
 endif()
@@ -120,12 +125,14 @@ add_executable(bench_simd_math benchmarks/bench_simd_math.cpp)
 target_link_libraries(bench_simd_math PRIVATE ternix_core benchmark::benchmark)
 add_executable(bench_i2k benchmarks/bench_i2k.cpp)
 target_link_libraries(bench_i2k PRIVATE ternix_core)
+add_executable(bench_bitmap benchmarks/bench_bitmap.cpp)
+target_link_libraries(bench_bitmap PRIVATE ternix_core)
 add_executable(bench_membw benchmarks/bench_membw.cpp)
 target_link_libraries(bench_membw PRIVATE ternix_core)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(bench_simd_math PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mavx2> $<$<COMPILE_LANGUAGE:CXX>:-mfma> $<$<COMPILE_LANGUAGE:CXX>:-O3>)
-    target_compile_options(ternix_cli PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mavx2> $<$<COMPILE_LANGUAGE:CXX>:-mfma> $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+    target_compile_options(bench_simd_math PRIVATE ${TERNIX_GNU_FLAGS})
+    target_compile_options(ternix_cli PRIVATE ${TERNIX_GNU_FLAGS})
 elseif(MSVC)
     target_compile_options(bench_simd_math PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2> $<$<COMPILE_LANGUAGE:CXX>:/O2>)
     target_compile_options(ternix_cli PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2> $<$<COMPILE_LANGUAGE:CXX>:/O2>)
@@ -139,7 +146,17 @@ if(TERNIX_HAS_CUDA)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(ternix_engine PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mavx2> $<$<COMPILE_LANGUAGE:CXX>:-mfma> $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+    target_compile_options(ternix_engine PRIVATE ${TERNIX_GNU_FLAGS})
 elseif(MSVC)
     target_compile_options(ternix_engine PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2> $<$<COMPILE_LANGUAGE:CXX>:/O2>)
+endif()
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    foreach(t bench_i2k bench_bitmap bench_membw ternix_tests)
+        target_compile_options(${t} PRIVATE ${TERNIX_GNU_FLAGS})
+    endforeach()
+elseif(MSVC)
+    foreach(t bench_i2k bench_bitmap bench_membw ternix_tests)
+        target_compile_options(${t} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2>)
+    endforeach()
 endif()

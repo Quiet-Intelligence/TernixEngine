@@ -49,6 +49,7 @@ private:
     std::atomic<size_t> next_{0};
     std::atomic<int> pending_{0};
     std::atomic<bool> stop_{false};
+    bool static_sched_ = false;
     Fn fn_ = nullptr;
     void* ctx_ = nullptr;
     size_t n_chunks_ = 0;

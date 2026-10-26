@@ -1,0 +1,290 @@
+[
+ {
+  "threads": 4,
+  "pin": "p",
+  "sched": "dynamic",
+  "median": 17.44,
+  "min": 16.93,
+  "max": 17.9
+ },
+ {
+  "threads": 4,
+  "pin": "p",
+  "sched": "static",
+  "median": 17.75,
+  "min": 17.55,
+  "max": 20.36
+ },
+ {
+  "threads": 4,
+  "pin": "none",
+  "sched": "dynamic",
+  "median": 9.87,
+  "min": 9.79,
+  "max": 14.77
+ },
+ {
+  "threads": 4,
+  "pin": "none",
+  "sched": "static",
+  "median": 9.16,
+  "min": 8.97,
+  "max": 16.86
+ },
+ {
+  "threads": 4,
+  "pin": "all",
+  "sched": "dynamic",
+  "median": 17.46,
+  "min": 16.99,
+  "max": 24.74
+ },
+ {
+  "threads": 4,
+  "pin": "all",
+  "sched": "static",
+  "median": 17.58,
+  "min": 17.0,
+  "max": 20.97
+ },
+ {
+  "threads": 8,
+  "pin": "p",
+  "sched": "dynamic",
+  "median": 27.94,
+  "min": 26.49,
+  "max": 37.12
+ },
+ {
+  "threads": 8,
+  "pin": "p",
+  "sched": "static",
+  "median": 29.19,
+  "min": 28.66,
+  "max": 38.74
+ },
+ {
+  "threads": 8,
+  "pin": "none",
+  "sched": "dynamic",
+  "median": 6.37,
+  "min": 6.13,
+  "max": 41.06
+ },
+ {
+  "threads": 8,
+  "pin": "none",
+  "sched": "static",
+  "median": 6.05,
+  "min": 5.52,
+  "max": 19.79
+ },
+ {
+  "threads": 8,
+  "pin": "all",
+  "sched": "dynamic",
+  "median": 28.61,
+  "min": 28.4,
+  "max": 39.0
+ },
+ {
+  "threads": 8,
+  "pin": "all",
+  "sched": "static",
+  "median": 28.59,
+  "min": 28.16,
+  "max": 40.39
+ },
+ {
+  "threads": 12,
+  "pin": "p",
+  "sched": "dynamic",
+  "median": 30.41,
+  "min": 29.67,
+  "max": 41.4
+ },
+ {
+  "threads": 12,
+  "pin": "p",
+  "sched": "static",
+  "median": 30.3,
+  "min": 29.61,
+  "max": 41.23
+ },
+ {
+  "threads": 12,
+  "pin": "none",
+  "sched": "dynamic",
+  "median": 4.6,
+  "min": 3.44,
+  "max": 40.71
+ },
+ {
+  "threads": 12,
+  "pin": "none",
+  "sched": "static",
+  "median": 3.28,
+  "min": 2.97,
+  "max": 8.53
+ },
+ {
+  "threads": 12,
+  "pin": "all",
+  "sched": "dynamic",
+  "median": 30.89,
+  "min": 30.21,
+  "max": 33.81
+ },
+ {
+  "threads": 12,
+  "pin": "all",
+  "sched": "static",
+  "median": 29.94,
+  "min": 29.47,
+  "max": 39.79
+ },
+ {
+  "threads": 16,
+  "pin": "p",
+  "sched": "dynamic",
+  "median": 32.71,
+  "min": 32.15,
+  "max": 39.98
+ },
+ {
+  "threads": 16,
+  "pin": "p",
+  "sched": "static",
+  "median": 32.55,
+  "min": 31.3,
+  "max": 38.87
+ },
+ {
+  "threads": 16,
+  "pin": "none",
+  "sched": "dynamic",
+  "median": 2.3,
+  "min": 2.1,
+  "max": 39.06
+ },
+ {
+  "threads": 16,
+  "pin": "none",
+  "sched": "static",
+  "median": 2.14,
+  "min": 2.03,
+  "max": 14.98
+ },
+ {
+  "threads": 16,
+  "pin": "all",
+  "sched": "dynamic",
+  "median": 26.37,
+  "min": 25.14,
+  "max": 33.26
+ },
+ {
+  "threads": 16,
+  "pin": "all",
+  "sched": "static",
+  "median": 31.95,
+  "min": 29.67,
+  "max": 39.25
+ },
+ {
+  "threads": 20,
+  "pin": "p",
+  "sched": "dynamic",
+  "median": 1.54,
+  "min": 1.48,
+  "max": 1.54
+ },
+ {
+  "threads": 20,
+  "pin": "p",
+  "sched": "static",
+  "median": 1.55,
+  "min": 1.54,
+  "max": 1.56
+ },
+ {
+  "threads": 20,
+  "pin": "none",
+  "sched": "dynamic",
+  "median": 1.88,
+  "min": 1.78,
+  "max": 40.42
+ },
+ {
+  "threads": 20,
+  "pin": "none",
+  "sched": "static",
+  "median": 1.95,
+  "min": 1.94,
+  "max": 13.23
+ },
+ {
+  "threads": 20,
+  "pin": "all",
+  "sched": "dynamic",
+  "median": 26.91,
+  "min": 24.17,
+  "max": 36.06
+ },
+ {
+  "threads": 20,
+  "pin": "all",
+  "sched": "static",
+  "median": 20.51,
+  "min": 15.41,
+  "max": 30.33
+ },
+ {
+  "threads": 24,
+  "pin": "p",
+  "sched": "dynamic",
+  "median": 1.54,
+  "min": 1.53,
+  "max": 1.58
+ },
+ {
+  "threads": 24,
+  "pin": "p",
+  "sched": "static",
+  "median": 1.55,
+  "min": 1.55,
+  "max": 1.58
+ },
+ {
+  "threads": 24,
+  "pin": "none",
+  "sched": "dynamic",
+  "median": 1.53,
+  "min": 1.5,
+  "max": 1.76
+ },
+ {
+  "threads": 24,
+  "pin": "none",
+  "sched": "static",
+  "median": 1.56,
+  "min": 1.54,
+  "max": 1.57
+ },
+ {
+  "threads": 24,
+  "pin": "all",
+  "sched": "dynamic",
+  "median": 7.23,
+  "min": 6.44,
+  "max": 10.45
+ },
+ {
+  "threads": 24,
+  "pin": "all",
+  "sched": "static",
+  "median": 8.41,
+  "min": 7.23,
+  "max": 10.07
+ }
+]

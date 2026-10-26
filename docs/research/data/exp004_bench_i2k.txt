@@ -1,0 +1,57 @@
+cpu: Intel(R) Core(TM) i7-14650HX | isa=avx_vnni | pool threads=16
+
+qo_2560x2560  (weights 1.64 MB, 204 rotating copies = 334 MB)
+  legacy_avx2_1row (K x N/4)                2686.9 us      0.61 GB/s      2.44 GMAC/s
+  i2k_1thread_scalar                        4804.1 us      0.34 GB/s      1.36 GMAC/s
+  i2k_1thread_avx2                           282.5 us      5.80 GB/s     23.20 GMAC/s
+  i2k_1thread_avx_vnni                       244.9 us      6.69 GB/s     26.76 GMAC/s
+  i2k_pool_avx_vnni_chunk16                   49.2 us     33.28 GB/s    133.11 GMAC/s
+  i2k_pool_avx_vnni_chunk32                   47.8 us     34.31 GB/s    137.22 GMAC/s
+  i2k_pool_avx_vnni_chunk64                   47.8 us     34.26 GB/s    137.04 GMAC/s
+  read_only_1thread                          144.6 us     11.33 GB/s     45.33 GMAC/s
+  read_only_pool                              56.3 us     29.08 GB/s    116.34 GMAC/s
+  i2k_1thread_cache_resident                 173.9 us      9.42 GB/s     37.69 GMAC/s
+
+kv_640x2560  (weights 0.41 MB, 819 rotating copies = 335 MB)
+  legacy_avx2_1row (K x N/4)                 621.3 us      0.66 GB/s      2.64 GMAC/s
+  i2k_1thread_scalar                        1195.3 us      0.34 GB/s      1.37 GMAC/s
+  i2k_1thread_avx2                            70.5 us      5.81 GB/s     23.22 GMAC/s
+  i2k_1thread_avx_vnni                        63.6 us      6.45 GB/s     25.78 GMAC/s
+  i2k_pool_avx_vnni_chunk16                   17.5 us     23.44 GB/s     93.76 GMAC/s
+  i2k_pool_avx_vnni_chunk32                   18.5 us     22.15 GB/s     88.58 GMAC/s
+  i2k_pool_avx_vnni_chunk64                   18.7 us     21.91 GB/s     87.65 GMAC/s
+  read_only_1thread                           39.0 us     10.49 GB/s     41.96 GMAC/s
+  read_only_pool                              17.9 us     22.94 GB/s     91.77 GMAC/s
+  i2k_1thread_cache_resident                  47.0 us      8.72 GB/s     34.90 GMAC/s
+
+gateup_6912x2560  (weights 4.42 MB, 75 rotating copies = 332 MB)
+  legacy_avx2_1row (K x N/4)                7693.7 us      0.57 GB/s      2.30 GMAC/s
+  i2k_1thread_scalar                       13192.3 us      0.34 GB/s      1.34 GMAC/s
+  i2k_1thread_avx2                           756.0 us      5.85 GB/s     23.40 GMAC/s
+  i2k_1thread_avx_vnni                       673.1 us      6.57 GB/s     26.29 GMAC/s
+  i2k_pool_avx_vnni_chunk16                  152.8 us     28.95 GB/s    115.81 GMAC/s
+  i2k_pool_avx_vnni_chunk32                  142.8 us     30.98 GB/s    123.91 GMAC/s
+  i2k_pool_avx_vnni_chunk64                  151.9 us     29.12 GB/s    116.47 GMAC/s
+  read_only_1thread                          418.3 us     10.58 GB/s     42.30 GMAC/s
+  read_only_pool                             138.2 us     32.00 GB/s    128.01 GMAC/s
+  i2k_1thread_cache_resident                 269.3 us     16.43 GB/s     65.72 GMAC/s
+
+down_2560x6912  (weights 4.42 MB, 75 rotating copies = 332 MB)
+  legacy_avx2_1row (K x N/4)                7655.1 us      0.58 GB/s      2.31 GMAC/s
+  i2k_1thread_scalar                       13232.6 us      0.33 GB/s      1.34 GMAC/s
+  i2k_1thread_avx2                           680.3 us      6.50 GB/s     26.01 GMAC/s
+  i2k_1thread_avx_vnni                       641.2 us      6.90 GB/s     27.60 GMAC/s
+  i2k_pool_avx_vnni_chunk16                  146.1 us     30.29 GB/s    121.15 GMAC/s
+  i2k_pool_avx_vnni_chunk32                  144.6 us     30.60 GB/s    122.38 GMAC/s
+  i2k_pool_avx_vnni_chunk64                  143.1 us     30.92 GB/s    123.67 GMAC/s
+  read_only_1thread                          420.6 us     10.52 GB/s     42.07 GMAC/s
+  read_only_pool                             142.8 us     30.98 GB/s    123.90 GMAC/s
+  i2k_1thread_cache_resident                 577.8 us      7.66 GB/s     30.62 GMAC/s
+
+sparse down projection 2560x6912 (dense 2-bit pool kernel vs exact K-major sparse; weights rotate beyond the LLC)
+  zeros   0%  nnz  6912 | dense    144.8 us | sparse    240.2 us | ratio 1.66 | bit-identical
+  zeros  50%  nnz  3387 | dense    141.8 us | sparse    175.9 us | ratio 1.24 | bit-identical
+  zeros  70%  nnz  2076 | dense    146.9 us | sparse    120.9 us | ratio 0.82 | bit-identical
+  zeros  80%  nnz  1358 | dense    128.4 us | sparse    102.2 us | ratio 0.80 | bit-identical
+  zeros  90%  nnz   673 | dense    153.6 us | sparse     70.6 us | ratio 0.46 | bit-identical
+  zeros  95%  nnz   337 | dense    131.8 us | sparse     46.9 us | ratio 0.36 | bit-identical

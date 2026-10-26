@@ -1,0 +1,3 @@
+A/B decode, 32 tokens after a 2000-token prompt, 7 interleaved repetitions, 16 threads
+  int8+sparse        median  26.75 tok/s  (min  25.44 max  27.33)  vs first: x1.000 (paired median x1.000, p10 x1.000, p90 x1.000)
+  int8+sparse+kv8    median  27.14 tok/s  (min  25.24 max  27.89)  vs first: x1.014 (paired median x1.015, p10 x0.979, p90 x1.067)

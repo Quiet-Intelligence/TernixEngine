@@ -1,5 +1,7 @@
 #include "ternix/threadpool.hpp"
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 #include <immintrin.h>
 
 #ifdef _WIN32
@@ -53,8 +55,25 @@ static void pin_thread(int logical_cpu) {
 }
 
 ThreadPool::ThreadPool(int threads, bool pin) {
-    std::vector<int> pcores = pin ? performance_cores() : std::vector<int>{};
-    if (threads <= 0) threads = pcores.empty() ? static_cast<int>(std::thread::hardware_concurrency()) : static_cast<int>(pcores.size());
+    // Experiment switches (EXP-005): TERNIX_PIN = p (performance cores, default) | all (every logical processor in order) | none;
+    // TERNIX_SCHED = dynamic (default) | static (equal contiguous chunk ranges per thread).
+    const char* pin_env = std::getenv("TERNIX_PIN");
+    const std::string pin_mode = pin_env ? pin_env : "p";
+    const char* sched_env = std::getenv("TERNIX_SCHED");
+    static_sched_ = sched_env && std::string(sched_env) == "static";
+    std::vector<int> pcores;
+    size_t n_perf = 0;
+    if (pin && pin_mode == "p") {
+        pcores = performance_cores();
+        n_perf = pcores.size();
+        // spill beyond the performance cores onto the remaining logical processors instead of wrapping: two spinning workers pinned
+        // to the same logical processor starve each other (EXP-005: 1.5 tok/s instead of 33)
+        for (unsigned i = 0; i < std::thread::hardware_concurrency() && i < 64 && !pcores.empty(); ++i)
+            if (std::find(pcores.begin(), pcores.begin() + static_cast<long>(n_perf), static_cast<int>(i)) == pcores.begin() + static_cast<long>(n_perf)) pcores.push_back(static_cast<int>(i));
+    }
+    else if (pin && pin_mode == "all")
+        for (unsigned i = 0; i < std::thread::hardware_concurrency() && i < 64; ++i) pcores.push_back(static_cast<int>(i));
+    if (threads <= 0) threads = pcores.empty() ? static_cast<int>(std::thread::hardware_concurrency()) : static_cast<int>(n_perf ? n_perf : pcores.size());
     nthreads_ = std::max(1, threads);
     if (!pcores.empty()) {
         pin_thread(pcores[0]);
@@ -76,6 +95,11 @@ ThreadPool::~ThreadPool() {
 }
 
 void ThreadPool::drain(int tid) {
+    if (static_sched_) {
+        const size_t T = static_cast<size_t>(nthreads_), t = static_cast<size_t>(tid);
+        for (size_t c = n_chunks_ * t / T; c < n_chunks_ * (t + 1) / T; ++c) fn_(ctx_, c, tid);
+        return;
+    }
     for (;;) {
         const size_t c = next_.fetch_add(1, std::memory_order_relaxed);
         if (c >= n_chunks_) break;

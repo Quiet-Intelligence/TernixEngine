@@ -1,0 +1,9 @@
+sequential read bandwidth, 1024 MiB buffer, 4 MiB chunks
+  threads  1:  23.09 GB/s
+  threads  2:  28.37 GB/s
+  threads  4:  35.47 GB/s
+  threads  8:  37.44 GB/s
+  threads 12:  38.47 GB/s
+  threads 16:  38.42 GB/s
+  threads 20:  37.90 GB/s
+  threads 24:  38.09 GB/s

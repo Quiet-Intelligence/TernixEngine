@@ -1,21 +1,24 @@
-# Contribution Guidelines for TernixEngine
+# Contributing to TernixEngine
 
-Thank you for your interest in contributing to TernixEngine! We welcome contributions from the community. By contributing, you agree that your contributions will be licensed under the Elastic License 2.0 (see `LICENSE` for details).
+Contributions are licensed under the Elastic License 2.0 (see `LICENSE`). `CLAUDE.md` is the working agreement for humans and agents
+alike; this file is the short version.
 
-## Development Workflow
-1. Fork the repository and create your branch from `develop`.
-2. Ensure your code strictly adheres to C++20 standards.
-3. Write GoogleTest unit tests for any new kernels or functions in the `tests/` directory.
-4. Run the CI/CD pipeline locally via `run_all.bat` to ensure all tests and benchmarks pass.
-5. Create a Pull Request targeting the `develop` branch.
+## Workflow
+1. Branch from `develop`: `feature/*`, `fix/*`, `perf/*`, `docs/*`, `chore/*` or `research/*`. `main` is for releases only.
+2. Conventional commits (`feat:`, `fix:`, `perf:`, `docs:`, `test:`, `chore:`, `research:`), atomic, no emojis, no attribution trailers.
+3. Every new kernel or operator ships with a differential test (exact for integer paths, ragged shapes included) in `tests/`.
+4. A performance claim needs: hardware, thread count and pinning, build flags, N interleaved repetitions with median and spread, and
+   the head and KV cache included (see `bench/ternixbench.py`). A change in logits needs the noise floor of EXP-001 for context.
+5. Research changes register the experiment in `docs/research/EXPERIMENTS.md` before running it, and record negative results.
+6. Merge into `develop` with `git merge --no-ff`; CI (`.github/workflows/ci.yml`) must pass.
 
-## Coding Standards
-- **No Emojis**: Keep documentation, commits, and comments professional and clinical.
-- **Atomic Commits**: Follow Conventional Commits guidelines (e.g., `feat: ...`, `fix: ...`, `chore: ...`).
-- **Dependencies**: TernixEngine is dependency-free by design. Do not introduce new external libraries for core inference logic.
+## Build and test
+```bat
+scripts\build.bat build-dev          :: MSVC + Ninja, CUDA auto-detected (Windows)
+ctest --test-dir build-dev --output-on-failure
+set PYTHONPATH=build-dev && python -m pytest tests -q      :: needs `uv pip install numpy pytest tokenizers`; model tests skip without models/
+```
+Python environments are created with `uv venv` (see the security notes in `CLAUDE.md`).
 
-## Reporting Bugs
-When opening an issue for bug reports or performance degradation, please include:
-- Your exact OS, CPU, and GPU models.
-- The output of the failing command.
-- Your `build/CMakeCache.txt` configuration file.
+## Reporting bugs
+Include OS, CPU and GPU model, the failing command and its output, and `build-dev/CMakeCache.txt`.

@@ -1,0 +1,3 @@
+int8      positions 12024 | argmax agree 12024 (100.0000%) | top5-set agree 97.754% | mean KL(full||head) 8.527e-05 | candidates mean 10.8 max 829 | head bytes 329.4 MB (+0.06 MB rescoring) vs bf16 656.7 MB
+int4-g32  positions 12024 | argmax agree 12024 (100.0000%) | top5-set agree 86.727% | mean KL(full||head) 5.976e-03 | candidates mean 20.2 max 1939 | head bytes 185.2 MB (+0.10 MB rescoring) vs bf16 656.7 MB
+max |exact-approx|/sigma over all rows and positions: int8 6.16, int4 5.86 (per-position max: median 4.50, p99 5.29)

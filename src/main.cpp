@@ -341,10 +341,10 @@ int run(M& model, const Tokenizer& tok, const Args& a) {
                 if (q == std::string::npos) q = a.configs.size();
                 if (q > p) cfgs.push_back(a.configs.substr(p, q - p));
             }
-            struct Cfg { HeadMode head; bool sparse; };
+            struct Cfg { HeadMode head; bool sparse; bool kv8; };
             std::vector<Cfg> cv;
             for (const std::string& c : cfgs) {
-                Cfg x{c.rfind("int8", 0) == 0 ? HeadMode::Int8 : (c.rfind("int4", 0) == 0 ? HeadMode::Int4 : HeadMode::Bf16), c.find("+sparse") != std::string::npos};
+                Cfg x{c.rfind("int8", 0) == 0 ? HeadMode::Int8 : (c.rfind("int4", 0) == 0 ? HeadMode::Int4 : HeadMode::Bf16), c.find("+sparse") != std::string::npos, c.find("+kv8") != std::string::npos};
                 cv.push_back(x);
                 model.set_head(x.head);
                 if (x.sparse) model.set_sparse_down(true);
@@ -361,6 +361,7 @@ int run(M& model, const Tokenizer& tok, const Args& a) {
                 for (size_t ci : order) {
                     model.set_head(cv[ci].head);
                     model.set_sparse_down(cv[ci].sparse);
+                    model.set_kv_int8(cv[ci].kv8);
                     model.reset();
                     model.forward(prompt.data(), a.pp, logits.data(), 1);
                     auto t1 = clk::now();
