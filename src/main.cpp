@@ -5,7 +5,7 @@
 //   ternix ppl       <model.ternix> <text-file> [--ppl-ctx 512] [--max-tokens N]   perplexity over a text file
 //   ternix logits    <model.ternix> (--prompt "..." | --ids "1 2 3") --out file.f32    last-token logits
 //   ternix tokenize  <model.ternix> --prompt "..."                      token ids
-// Common: --threads T  --ctx C  --isa scalar|avx2|avx_vnni  --gpu
+// Common: --threads T  --ctx C  --isa scalar|avx2|avx_vnni  --gpu  --head bf16|int8|int4 (CPU: certified-exact quantised output head)
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -14,6 +14,10 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <numeric>
+#include <random>
+#include <tuple>
+#include <type_traits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -32,9 +36,12 @@ using clk = std::chrono::steady_clock;
 namespace {
 
 struct Args {
-    std::string cmd, model, prompt, out, file, ids_arg;
+    std::string cmd, model, prompt, out, file, ids_arg, configs = "bf16,int8,int8+sparse";
     int n = 64, threads = 0, ctx = 4096, pp = 128, tg = 64, reps = 3, ppl_ctx = 512, max_tokens = 0;
     bool chat = false, prompt_set = false, special = true, gpu = false;
+    HeadMode head = HeadMode::Bf16;
+    bool sparse_down = false;
+    double head_k = 0;   // headeval: k-sigma statistical bound for the int4 head (0 = certified)
     SamplerConfig sampler;
     Isa isa = best_isa();
 };
@@ -74,14 +81,21 @@ Args parse(int argc, char** argv) {
         else if (s == "--ids") a.ids_arg = next();
         else if (s == "--chat") a.chat = true;
         else if (s == "--gpu") a.gpu = true;
+        else if (s == "--configs") a.configs = next();
+        else if (s == "--sparse-down") a.sparse_down = true;
+        else if (s == "--head-k") a.head_k = std::atof(next());
+        else if (s == "--head") {
+            const std::string v = next();
+            a.head = v == "int8" ? HeadMode::Int8 : (v == "int4" ? HeadMode::Int4 : HeadMode::Bf16);
+        }
         else if (s == "--no-special") a.special = false;
         else if (s == "--isa") {
             const std::string v = next();
             a.isa = v == "scalar" ? Isa::Scalar : (v == "avx2" ? Isa::Avx2 : Isa::AvxVnni);
-        } else if (a.cmd == "ppl" && a.file.empty()) a.file = s;
+        } else if ((a.cmd == "ppl" || a.cmd == "headeval") && a.file.empty()) a.file = s;
         else usage();
     }
-    if (a.cmd == "ppl" && a.file.empty()) usage();
+    if ((a.cmd == "ppl" || a.cmd == "headeval") && a.file.empty()) usage();
     return a;
 }
 
@@ -231,7 +245,144 @@ int run(M& model, const Tokenizer& tok, const Args& a) {
         std::sort(tg.begin(), tg.end());
         std::printf("prefill %d tok: median %.1f tok/s (min %.1f max %.1f)\n", a.pp, pp[pp.size() / 2], pp.front(), pp.back());
         std::printf("decode  %d tok: median %.2f tok/s (min %.2f max %.2f)\n", a.tg, tg[tg.size() / 2], tg.front(), tg.back());
+        if constexpr (std::is_same_v<M, Model>) {
+            if (model.sparse_down()) std::printf("down-projection nonzero fraction (batch-1 calls): %.3f\n", model.mean_down_nnz_fraction());
+            if (model.head() != nullptr) std::printf("head %s: mean candidates %.1f\n", model.head_mode() == HeadMode::Int8 ? "int8" : "int4", model.head()->mean_candidates());
+        }
         return 0;
+    }
+    if constexpr (std::is_same_v<M, Model>) {
+        if (a.cmd == "headeval") {
+            // Compare the quantised heads with the bf16 head on the hidden vectors of real text (EXP-003).
+            const std::string text = read_file(a.file);
+            std::vector<int32_t> ids = tok.encode(text, false, false);
+            if (a.max_tokens > 0 && static_cast<int>(ids.size()) > a.max_tokens) ids.resize(static_cast<size_t>(a.max_tokens));
+            const size_t H = cfg.hidden, V = cfg.vocab;
+            OutputHead full(model.embedding(), V, H, HeadMode::Bf16, model.pool());
+            OutputHead h8(model.embedding(), V, H, HeadMode::Int8, model.pool());
+            OutputHead h4(model.embedding(), V, H, HeadMode::Int4, model.pool());
+            struct Acc { size_t arg = 0, top5 = 0, n = 0; double kl = 0, kl_cand = 0, cand = 0; size_t maxc = 0; };
+            if (a.head_k > 0) h4.set_bound_scale(a.head_k / std::sqrt(static_cast<double>(H)));
+            Acc acc8, acc4;
+            std::vector<float> sg(V);
+            double zmax8 = 0, zmax4 = 0;
+            std::vector<double> z4all;
+            std::vector<float> lf(V), la(V), hidden(static_cast<size_t>(Model::kMaxChunk) * H);
+            const size_t W = static_cast<size_t>(std::min(a.ctx, a.ppl_ctx));
+            auto softmax = [&](const std::vector<float>& l, std::vector<double>& p) {
+                float mx = *std::max_element(l.begin(), l.end());
+                double z = 0;
+                for (size_t v = 0; v < V; ++v) { p[v] = std::exp(static_cast<double>(l[v] - mx)); z += p[v]; }
+                for (auto& x : p) x /= z;
+            };
+            std::vector<double> pf(V), pa(V);
+            for (size_t s = 0; s < ids.size(); s += W - 1) {
+                std::vector<int32_t> win{static_cast<int32_t>(cfg.bos)};
+                win.insert(win.end(), ids.begin() + static_cast<long>(s), ids.begin() + static_cast<long>(std::min(ids.size(), s + W - 1)));
+                model.reset();
+                for (size_t off = 0; off < win.size(); off += Model::kMaxChunk) {
+                    const int n = static_cast<int>(std::min<size_t>(Model::kMaxChunk, win.size() - off));
+                    model.forward(win.data() + off, n, hidden.data(), 3);
+                    for (int t = 0; t < n; ++t) {
+                        const float* x = hidden.data() + static_cast<size_t>(t) * H;
+                        const int32_t best = full.logits(x, lf.data());
+                        softmax(lf, pf);
+                        std::vector<int32_t> top5(V);
+                        std::iota(top5.begin(), top5.end(), 0);
+                        std::partial_sort(top5.begin(), top5.begin() + 5, top5.end(), [&](int32_t p, int32_t q) { return lf[p] > lf[q]; });
+                        for (auto* hd2 : {&h8, &h4}) {   // error-to-sigma ratio of the approximations against the exact logits
+                            hd2->approx_logits(x, la.data(), sg.data());
+                            double zm = 0;
+                            for (size_t v = 0; v < V; ++v) zm = std::max(zm, std::fabs(static_cast<double>(lf[v] - la[v])) / std::max(1e-12, static_cast<double>(sg[v])));
+                            (hd2 == &h8 ? zmax8 : zmax4) = std::max(hd2 == &h8 ? zmax8 : zmax4, zm);
+                            if (hd2 == &h4) z4all.push_back(zm);
+                        }
+                        for (auto pr : {std::make_pair(&h8, &acc8), std::make_pair(&h4, &acc4)}) {
+                            OutputHead& hd = *pr.first;
+                            Acc& ac = *pr.second;
+                            const size_t before = hd.stats().candidates;
+                            const int32_t b2 = hd.logits(x, la.data());
+                            const size_t ncand = hd.stats().candidates - before;
+                            ac.n++; ac.arg += (b2 == best); ac.cand += static_cast<double>(ncand); ac.maxc = std::max(ac.maxc, ncand);
+                            std::vector<int32_t> t5(V);
+                            std::iota(t5.begin(), t5.end(), 0);
+                            std::partial_sort(t5.begin(), t5.begin() + 5, t5.end(), [&](int32_t p, int32_t q) { return la[p] > la[q]; });
+                            size_t same = 0;
+                            for (int i = 0; i < 5; ++i) same += std::find(top5.begin(), top5.begin() + 5, t5[i]) != top5.begin() + 5;
+                            ac.top5 += (same == 5);
+                            softmax(la, pa);
+                            double kl = 0;
+                            for (size_t v = 0; v < V; ++v) if (pf[v] > 0) kl += pf[v] * (std::log(pf[v]) - std::log(std::max(pa[v], 1e-300)));
+                            ac.kl += kl;
+                        }
+                    }
+                }
+            }
+            for (auto& [name, ac, hd] : {std::tuple<const char*, Acc&, OutputHead&>{"int8", acc8, h8}, {"int4-g32", acc4, h4}})
+                std::printf("%-9s positions %zu | argmax agree %zu (%.4f%%) | top5-set agree %.3f%% | mean KL(full||head) %.3e | candidates mean %.1f max %zu | head bytes %.1f MB (+%.2f MB rescoring) vs bf16 %.1f MB\n",
+                            name, ac.n, ac.arg, 100.0 * ac.arg / ac.n, 100.0 * ac.top5 / ac.n, ac.kl / ac.n, ac.cand / ac.n, ac.maxc,
+                            hd.compressed_bytes() / 1e6, ac.cand / ac.n * H * 2 / 1e6, V * H * 2 / 1e6);
+            std::sort(z4all.begin(), z4all.end());
+            std::printf("max |exact-approx|/sigma over all rows and positions: int8 %.2f, int4 %.2f (per-position max: median %.2f, p99 %.2f)\n", zmax8, zmax4,
+                        z4all[z4all.size() / 2], z4all[z4all.size() * 99 / 100]);
+            return 0;
+        }
+    }
+    if constexpr (std::is_same_v<M, Model>) {
+        if (a.cmd == "abtest") {
+            // Interleaved A/B decode benchmark: every repetition runs every configuration once (shuffled order), so drift of the
+            // machine state (clocks, thermals, background load) hits all configurations alike. Reports medians and paired ratios.
+            std::vector<std::string> cfgs;
+            for (size_t p = 0, q; p <= a.configs.size(); p = q + 1) {
+                q = a.configs.find(',', p);
+                if (q == std::string::npos) q = a.configs.size();
+                if (q > p) cfgs.push_back(a.configs.substr(p, q - p));
+            }
+            struct Cfg { HeadMode head; bool sparse; };
+            std::vector<Cfg> cv;
+            for (const std::string& c : cfgs) {
+                Cfg x{c.rfind("int8", 0) == 0 ? HeadMode::Int8 : (c.rfind("int4", 0) == 0 ? HeadMode::Int4 : HeadMode::Bf16), c.find("+sparse") != std::string::npos};
+                cv.push_back(x);
+                model.set_head(x.head);
+                if (x.sparse) model.set_sparse_down(true);
+            }
+            std::vector<int32_t> prompt(static_cast<size_t>(a.pp));
+            for (size_t i = 0; i < prompt.size(); ++i) prompt[i] = static_cast<int32_t>(1000 + (i * 7919) % 50000);
+            std::vector<float> logits(cfg.vocab);
+            std::vector<std::vector<double>> res(cv.size());
+            std::mt19937 rng(12345);
+            std::vector<size_t> order(cv.size());
+            std::iota(order.begin(), order.end(), 0);
+            for (int r = -1; r < a.reps; ++r) {
+                std::shuffle(order.begin(), order.end(), rng);
+                for (size_t ci : order) {
+                    model.set_head(cv[ci].head);
+                    model.set_sparse_down(cv[ci].sparse);
+                    model.reset();
+                    model.forward(prompt.data(), a.pp, logits.data(), 1);
+                    auto t1 = clk::now();
+                    for (int i = 0; i < a.tg; ++i) {
+                        const int32_t next = Sampler::argmax(logits.data(), cfg.vocab);
+                        model.forward(&next, 1, logits.data(), 1);
+                    }
+                    const double ts = std::chrono::duration<double>(clk::now() - t1).count();
+                    if (r >= 0) res[ci].push_back(a.tg / ts);
+                }
+            }
+            std::printf("A/B decode, %d tokens after a %d-token prompt, %d interleaved repetitions, %d threads\n", a.tg, a.pp, a.reps, model.pool().size());
+            auto med = [](std::vector<double> v) { std::sort(v.begin(), v.end()); return v[v.size() / 2]; };
+            const double base = med(res[0]);
+            for (size_t ci = 0; ci < cv.size(); ++ci) {
+                std::vector<double> ratio;
+                for (size_t r = 0; r < res[ci].size(); ++r) ratio.push_back(res[ci][r] / res[0][r]);
+                auto sorted = res[ci];
+                std::sort(sorted.begin(), sorted.end());
+                std::sort(ratio.begin(), ratio.end());
+                std::printf("  %-18s median %6.2f tok/s  (min %6.2f max %6.2f)  vs first: x%.3f (paired median x%.3f, p10 x%.3f, p90 x%.3f)\n", cfgs[ci].c_str(), med(res[ci]),
+                            sorted.front(), sorted.back(), med(res[ci]) / base, med(ratio), ratio[ratio.size() / 10], ratio[ratio.size() * 9 / 10]);
+            }
+            return 0;
+        }
     }
     if (a.cmd == "ppl") {
         const std::string text = read_file(a.file);
@@ -284,6 +435,8 @@ int main(int argc, char** argv) {
         }
         file.prefault();
         Model model(file, a.threads, a.ctx, a.isa);
+        model.set_head(a.head);
+        if (a.sparse_down) model.set_sparse_down(true);
         return run(model, tok, a);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());

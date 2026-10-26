@@ -12,6 +12,8 @@
 #include <vector>
 #include "ternix/cpu_features.hpp"
 #include "ternix/format.hpp"
+#include "ternix/head.hpp"
+#include "ternix/i2k.hpp"
 #include "ternix/threadpool.hpp"
 #include "ternix/util.hpp"
 
@@ -52,6 +54,19 @@ public:
     // 2 = every token -> logits[n][vocab]. Returns false if the context window would overflow.
     bool forward(const int32_t* tokens, int n, float* logits, int logits_mode = 1);
 
+    // Output head precision for batch-1 decode (HeadMode::Bf16 is the reference; Int8/Int4 are certified-exact for greedy).
+    // Builds the compressed copy on first use (a second or two for 128k x 2560).
+    void set_head(HeadMode mode);
+    HeadMode head_mode() const { return head_mode_; }
+    const uint16_t* embedding() const { return embed_; }
+    OutputHead* head() { return head_; }
+    // Exact activation-sparse down projection at batch 1 (bit-identical results; builds a K-major copy of every down matrix, +25%
+    // of the ternary weight memory, on first use).
+    void set_sparse_down(bool on);
+    bool sparse_down() const { return sparse_down_; }
+    double mean_down_nnz_fraction() const { return sparse_calls_ ? double(sparse_nnz_) / (double(sparse_calls_) * cfg_.ffn) : 0.0; }
+    // logits_mode 3 of forward(): final-norm hidden vectors, hidden[n][H] (input of the head).
+
     // Teacher-forced scoring (see CudaModel::forward_nll): nll[i] for the logits after tokens[i] against targets[i].
     bool forward_nll(const int32_t* tokens, int n, const int32_t* targets, float* nll, int32_t* argmax = nullptr);
 
@@ -63,7 +78,7 @@ private:
     void run_linears(const Job* jobs, int njobs, int n);
     void chunk_forward(const int32_t* tokens, int n, float* logits, int logits_mode);
     void attention(int layer, int n);
-    void lm_head(const float* xn, int n, float* logits);
+    void lm_head(const float* xn, int n, float* logits, bool decode);
 
     const ModelFile& file_;
     ModelConfig cfg_;
@@ -71,8 +86,16 @@ private:
     ThreadPool pool_;
     int max_ctx_, pos_ = 0;
     const uint16_t* embed_ = nullptr;
+    std::unique_ptr<OutputHead> heads_[3];        // built lazily per mode and kept, so modes can be switched cheaply
+    OutputHead* head_ = nullptr;                  // active compressed head (nullptr = bf16 reference path)
+    HeadMode head_mode_ = HeadMode::Bf16;
     const float* final_norm_ = nullptr;
     std::vector<LayerWeights> layers_;
+    bool sparse_down_ = false;
+    std::vector<AlignedBuf<uint8_t>> down_k_;      // per layer: K-major copy of the down projection
+    i2k::SparseScratch sparse_scratch_;
+    AlignedBuf<int32_t> sparse_y_;
+    uint64_t sparse_nnz_ = 0, sparse_calls_ = 0;
 
     // scratch (sized for kMaxChunk tokens)
     AlignedBuf<float> x_, xn_, q_, k_, v_, ctx_, gate_, up_, hid_, tmp_;

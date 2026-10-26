@@ -136,6 +136,51 @@ int main(int argc, char** argv) {
                 first = false;
             }
     }
+    // exact activation-sparse down projection (N = 2560, K = 6912): dense pool kernel vs K-major sparse driver per sparsity
+    {
+        const size_t N = 2560, K = 6912, bytes = N * K / 4;
+        const size_t copies = std::max<size_t>(4, (320u << 20) / bytes);
+        std::mt19937 rng(5);
+        std::vector<int8_t> w(N * K);
+        for (auto& x : w) x = static_cast<int8_t>(static_cast<int>(rng() % 3) - 1);
+        std::vector<std::unique_ptr<uint8_t[]>> wi(copies), wk(copies);
+        for (size_t c = 0; c < copies; ++c) {
+            wi[c].reset(new uint8_t[bytes]);
+            wk[c].reset(new uint8_t[bytes]);
+        }
+        i2k::pack(w.data(), wi[0].get(), N, K);
+        i2k::pack_kmajor_from_i2k(wi[0].get(), wk[0].get(), N, K);
+        for (size_t c = 1; c < copies; ++c) {
+            std::memcpy(wi[c].get(), wi[0].get(), bytes);
+            std::memcpy(wk[c].get(), wk[0].get(), bytes);
+        }
+        std::printf("\nsparse down projection 2560x6912 (dense 2-bit pool kernel vs exact K-major sparse; weights rotate beyond the LLC)\n");
+        i2k::SparseScratch scratch;
+        std::vector<int32_t> y(N), y_ref(N);
+        for (int zero_pct : {0, 50, 70, 80, 90, 95}) {
+            std::vector<int8_t> q(K);
+            for (auto& v : q) v = (static_cast<int>(rng() % 100) < zero_pct) ? 0 : static_cast<int8_t>((static_cast<int>(rng() % 255) - 127) | 1);
+            int32_t sq = 0;
+            for (int8_t v : q) sq += v;
+            const Isa best = best_isa();
+            constexpr size_t chunk = 32;
+            const size_t nch = (N + chunk - 1) / chunk;
+            const double dense_us = median_us([&](int i) {
+                const uint8_t* W = wi[i % copies].get();
+                pool.parallel_for(nch, [&](size_t c, int) {
+                    const size_t n0 = c * chunk, n1 = std::min(N, n0 + chunk);
+                    i2k::gemv(W, q.data(), sq, y_ref.data() + n0, n0, n1, K, best);
+                });
+            }, reps, static_cast<int>(copies));
+            const double sparse_us = median_us([&](int i) { i2k::gemv_sparse(pool, wk[i % copies].get(), N, K, q.data(), y.data(), scratch, best); }, reps, static_cast<int>(copies));
+            if (!(y == y_ref)) {
+                std::printf("  SPARSE MISMATCH at %d%% zeros\n", zero_pct);
+                return 1;
+            }
+            std::printf("  zeros %3d%%  nnz %5zu | dense %8.1f us | sparse %8.1f us | ratio %.2f | bit-identical\n", zero_pct, scratch.nnz, dense_us, sparse_us, sparse_us / dense_us);
+            if (jf) std::fprintf(jf, ",\n  {\"shape\": \"down_sparse_2560x6912\", \"zero_pct\": %d, \"dense_us\": %.2f, \"sparse_us\": %.2f}", zero_pct, dense_us, sparse_us);
+        }
+    }
     if (jf) { std::fprintf(jf, "\n]}\n"); std::fclose(jf); }
     return 0;
 }

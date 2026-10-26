@@ -69,6 +69,7 @@ set(TERNIX_SOURCES
     src/format.cpp
     src/tokenizer.cpp
     src/ops.cpp
+    src/head.cpp
     src/sampler.cpp
     src/model.cpp
 )

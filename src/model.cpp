@@ -146,8 +146,37 @@ void Model::attention(int layer, int n) {
     });
 }
 
-void Model::lm_head(const float* xn, int n, float* logits) {
+void Model::set_sparse_down(bool on) {
+    sparse_down_ = on;
+    if (!on || !down_k_.empty()) return;
+    down_k_.resize(layers_.size());
+    for (size_t l = 0; l < layers_.size(); ++l) {
+        const Linear& d = layers_[l].down;
+        down_k_[l].reset(d.K * d.N / 4);
+        i2k::pack_kmajor_from_i2k(d.w, down_k_[l].data(), d.N, d.K);
+    }
+    sparse_y_.reset(cfg_.hidden);
+}
+
+void Model::set_head(HeadMode mode) {
+    head_mode_ = mode;
+    head_ = nullptr;
+    if (mode == HeadMode::Bf16) return;
+    auto& h = heads_[static_cast<int>(mode)];
+    if (!h) {
+        h = std::make_unique<OutputHead>(embed_, cfg_.vocab, cfg_.hidden, mode, pool_);
+        // int4: the worst-case bound would keep ~every row as a candidate; use the 6.5-sigma statistical bound (see head.hpp)
+        if (mode == HeadMode::Int4) h->set_bound_scale(6.5 / std::sqrt(static_cast<double>(cfg_.hidden)));
+    }
+    head_ = h.get();
+}
+
+void Model::lm_head(const float* xn, int n, float* logits, bool decode) {
     const size_t H = cfg_.hidden, V = cfg_.vocab;
+    if (decode && n == 1 && head_) {
+        head_->logits(xn, logits);
+        return;
+    }
     constexpr size_t kChunk = 256;
     pool_.parallel_for((V + kChunk - 1) / kChunk, [&](size_t c, int) {
         const size_t v0 = c * kChunk, v1 = std::min(V, v0 + kChunk);
@@ -211,8 +240,18 @@ void Model::chunk_forward(const int32_t* tokens, int n, float* logits, int logit
         for (int t = 0; t < n; ++t) ops::relu2_mul(hid_.data() + t * F, gate_.data() + t * F, up_.data() + t * F, F);
         norm(hid_.data(), hid_.data(), w.ffn_sub, F, n);
         quant(hid_.data(), F);
-        const Job dn[1] = {{&w.down, x_.data(), true}};
-        linears(dn, 1);
+        if (sparse_down_ && n == 1) {
+            auto t = clk::now();
+            i2k::gemv_sparse(pool_, down_k_[l].data(), w.down.N, w.down.K, q8_.data(), sparse_y_.data(), sparse_scratch_, isa_);
+            const float f = deq_[0] * w.down.scale;
+            for (size_t i = 0; i < w.down.N; ++i) x_[i] += static_cast<float>(sparse_y_[i]) * f;
+            sparse_nnz_ += sparse_scratch_.nnz;
+            ++sparse_calls_;
+            prof_.linear_ms += ms_since(t);
+        } else {
+            const Job dn[1] = {{&w.down, x_.data(), true}};
+            linears(dn, 1);
+        }
         if (std::getenv("TERNIX_DEBUG")) {
             double ss = 0;
             for (int t = 0; t < n; ++t)
@@ -223,12 +262,16 @@ void Model::chunk_forward(const int32_t* tokens, int n, float* logits, int logit
     }
     pos_ += n;
     if (logits_mode != 0) {
-        const int rows = logits_mode == 2 ? n : 1;
-        const float* src = x_.data() + (logits_mode == 2 ? 0 : size_t(n - 1) * H);
+        const int rows = logits_mode == 1 ? 1 : n;
+        const float* src = x_.data() + (logits_mode == 1 ? size_t(n - 1) * H : 0);
         norm(xn_.data(), src, final_norm_, H, rows);
-        auto t = clk::now();
-        lm_head(xn_.data(), rows, logits);
-        prof_.head_ms += ms_since(t);
+        if (logits_mode == 3) {
+            std::memcpy(logits, xn_.data(), size_t(rows) * H * sizeof(float));
+        } else {
+            auto t = clk::now();
+            lm_head(xn_.data(), rows, logits, logits_mode == 1);
+            prof_.head_ms += ms_since(t);
+        }
     }
     prof_.total_ms += ms_since(t0);
     prof_.tokens += static_cast<uint64_t>(n);
@@ -245,6 +288,7 @@ bool Model::forward(const int32_t* tokens, int n, float* logits, int logits_mode
         int mode = 0;
         float* dst = nullptr;
         if (logits_mode == 2) { mode = 2; dst = logits + size_t(done) * V; }
+        else if (logits_mode == 3) { mode = 3; dst = logits + size_t(done) * cfg_.hidden; }
         else if (logits_mode == 1 && last) { mode = 1; dst = logits; }
         chunk_forward(tokens + done, c, dst, mode);
         done += c;
