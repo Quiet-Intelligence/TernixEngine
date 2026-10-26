@@ -236,6 +236,7 @@ void gemm_rows(const uint8_t* W, const int8_t* q, const int32_t* sum_q, size_t M
         case Isa::Scalar: gemm_rows_scalar(W, q, sum_q, MR, y, y_stride, n0, n1, K); break;
         case Isa::Avx2: dispatch_mr<false>(W, q, sum_q, MR, y, y_stride, n0, n1, K); break;
         case Isa::AvxVnni: dispatch_mr<true>(W, q, sum_q, MR, y, y_stride, n0, n1, K); break;
+        case Isa::Avx512Vnni: gemm_rows_avx512(W, q, sum_q, MR, y, y_stride, n0, n1, K); break;
     }
 }
 
@@ -334,6 +335,10 @@ void gemm_rows_gs(const uint8_t* W, const uint16_t* gs, const int8_t* q, const f
         case Isa::Scalar: gemm_rows_gs_scalar(W, gs, q, deq, sum_q, MR, y, y_stride, n0, n1, K); break;
         case Isa::Avx2: gemm_rows_gs_simd<false>(W, gs, q, deq, sum_q, MR, y, y_stride, n0, n1, K); break;
         case Isa::AvxVnni: gemm_rows_gs_simd<true>(W, gs, q, deq, sum_q, MR, y, y_stride, n0, n1, K); break;
+        case Isa::Avx512Vnni:   // no AVX-512 group-scaled kernel: use the VEX VNNI path when the CPU has it (Ice Lake server does not), else AVX2
+            if (cpu_info().avx_vnni) gemm_rows_gs_simd<true>(W, gs, q, deq, sum_q, MR, y, y_stride, n0, n1, K);
+            else gemm_rows_gs_simd<false>(W, gs, q, deq, sum_q, MR, y, y_stride, n0, n1, K);
+            break;
     }
 }
 

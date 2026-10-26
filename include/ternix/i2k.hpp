@@ -35,6 +35,9 @@ void quantize_act_blocks(const float* x, int8_t* q, size_t K, float* deq, int32_
 void gemm_rows_gs(const uint8_t* W, const uint16_t* gs, const int8_t* q, const float* deq, const int32_t* sum_q, size_t MR, float* y, size_t y_stride,
                   size_t n0, size_t n1, size_t K, Isa isa);
 
+// AVX-512 VNNI implementation of gemm_rows (src/i2k_avx512.cpp, separate translation unit); only call it when cpu_info().avx512_vnni.
+void gemm_rows_avx512(const uint8_t* W, const int8_t* q, const int32_t* sum_q, size_t MR, int32_t* y, size_t y_stride, size_t n0, size_t n1, size_t K);
+
 // y[i] = sum_k q[k] * W[n0 + i][k] for i in [0, n1 - n0): exact int32.
 void gemv(const uint8_t* W, const int8_t* q, int32_t sum_q, int32_t* y, size_t n0, size_t n1, size_t K, Isa isa);
 

@@ -94,7 +94,7 @@ Args parse(int argc, char** argv) {
         else if (s == "--no-special") a.special = false;
         else if (s == "--isa") {
             const std::string v = next();
-            a.isa = v == "scalar" ? Isa::Scalar : (v == "avx2" ? Isa::Avx2 : Isa::AvxVnni);
+            a.isa = v == "scalar" ? Isa::Scalar : (v == "avx2" ? Isa::Avx2 : (v == "avx512_vnni" ? Isa::Avx512Vnni : Isa::AvxVnni));
         } else if ((a.cmd == "ppl" || a.cmd == "headeval") && a.file.empty()) a.file = s;
         else usage();
     }

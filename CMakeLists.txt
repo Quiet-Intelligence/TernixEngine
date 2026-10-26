@@ -67,6 +67,7 @@ set(TERNIX_SOURCES
     src/cpu_features.cpp
     src/threadpool.cpp
     src/i2k.cpp
+    src/i2k_avx512.cpp
     src/mul_mat_ternary.cpp
     src/tensor.cpp
     src/simd_math.cpp
@@ -84,6 +85,12 @@ if(TERNIX_HAS_CUDA)
 endif()
 
 add_library(ternix_core STATIC ${TERNIX_SOURCES})
+# AVX-512 flags only for the kernel file that needs them: nothing else may be compiled with AVX-512 enabled
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(src/i2k_avx512.cpp PROPERTIES COMPILE_OPTIONS "-mavx512f;-mavx512bw;-mavx512vl;-mavx512vnni")
+elseif(MSVC)
+    set_source_files_properties(src/i2k_avx512.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
+endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     
 endif()
@@ -108,7 +115,7 @@ target_link_libraries(ternix_cli PRIVATE ternix_core)
 
 # Tests
 enable_testing()
-add_executable(ternix_tests tests/test_bitpack.cpp tests/test_simd_math.cpp tests/test_ternary_matmul.cpp tests/test_i2k.cpp)
+add_executable(ternix_tests tests/test_bitpack.cpp tests/test_simd_math.cpp tests/test_ternary_matmul.cpp tests/test_i2k.cpp tests/i2k_avx512_emulated.cpp)
 target_link_libraries(ternix_tests PRIVATE ternix_core gtest_main)
 add_test(NAME CoreTests COMMAND ternix_tests)
 

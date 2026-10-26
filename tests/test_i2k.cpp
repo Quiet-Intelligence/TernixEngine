@@ -14,6 +14,7 @@ std::vector<Isa> available_isas() {
     std::vector<Isa> v{Isa::Scalar};
     if (cpu_info().avx2) v.push_back(Isa::Avx2);
     if (cpu_info().avx_vnni) v.push_back(Isa::AvxVnni);
+    if (cpu_info().avx512_vnni) v.push_back(Isa::Avx512Vnni);   // absent on the development machine: these cases run only on AVX-512 hardware
     return v;
 }
 
@@ -266,3 +267,40 @@ TEST(I2K, BlockQuantizeMatchesPerBlockTokenQuantize) {
         EXPECT_GT(deq[1], 5 * deq[0]);               // block 1 holds the outlier
     }
 }
+
+namespace ternix { namespace i2k {
+// src/i2k_avx512.cpp compiled against scalar-emulated AVX-512 intrinsics (tests/i2k_avx512_emulated.cpp)
+void gemm_rows_avx512_emulated(const uint8_t* W, const int8_t* q, const int32_t* sum_q, size_t MR, int32_t* y, size_t y_stride, size_t n0, size_t n1, size_t K);
+} }
+
+// The AVX-512 kernel's indexing, block pairing (two 128-column blocks per 64-byte load), odd-block tail and reduction, checked on any CPU.
+// The intrinsics themselves are emulated here, so this does not exercise the hardware instructions.
+TEST(I2K, EmulatedAvx512KernelMatchesScalar) {
+    uint32_t seed = 77;
+    for (size_t K : {128, 256, 384, 640, 2560, 6912})
+        for (size_t N : {1, 2, 3, 4, 5, 8, 17, 37})
+            for (size_t MR = 1; MR <= 4; ++MR) {
+                auto w = random_ternary(N * K, seed++);
+                auto q = random_i8(MR * K, seed++);
+                std::vector<uint8_t> p(N * K / 4);
+                i2k::pack(w.data(), p.data(), N, K);
+                std::vector<int32_t> sums(MR);
+                for (size_t m = 0; m < MR; ++m) sums[m] = sum_row(&q[m * K], K);
+                std::vector<int32_t> got(MR * N, -7), want(MR * N, -9);
+                i2k::gemm_rows_avx512_emulated(p.data(), q.data(), sums.data(), MR, got.data(), N, 0, N, K);
+                i2k::gemm_rows(p.data(), q.data(), sums.data(), MR, want.data(), N, 0, N, K, Isa::Scalar);
+                ASSERT_EQ(want, got) << "K=" << K << " N=" << N << " MR=" << MR;
+            }
+    // a column range that does not start at row 0
+    const size_t K = 640, N = 13;
+    auto w = random_ternary(N * K, 5);
+    auto q = random_i8(K, 6);
+    std::vector<uint8_t> p(N * K / 4);
+    i2k::pack(w.data(), p.data(), N, K);
+    const int32_t sum = sum_row(q.data(), K);
+    std::vector<int32_t> got(7, -1), want(7, -2);
+    i2k::gemm_rows_avx512_emulated(p.data(), q.data(), &sum, 1, got.data(), 7, 4, 11, K);
+    i2k::gemm_rows(p.data(), q.data(), &sum, 1, want.data(), 7, 4, 11, K, Isa::Scalar);
+    EXPECT_EQ(want, got);
+}
+
