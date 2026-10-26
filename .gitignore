@@ -23,3 +23,13 @@ __pycache__/
 # Raw benchmark dumps (README tables and benchmarks/*.png are generated from these and tracked)
 benchmarks/*.csv
 benchmarks/*.json
+
+# Python env
+.venv/
+*.egg-info/
+
+# Models and large artifacts
+models/
+*.ternix
+*.safetensors
+*.gguf

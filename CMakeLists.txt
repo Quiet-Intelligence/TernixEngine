@@ -59,6 +59,9 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(pybind11)
 
 set(TERNIX_SOURCES 
+    src/cpu_features.cpp
+    src/threadpool.cpp
+    src/i2k.cpp
     src/mul_mat_ternary.cpp
     src/tensor.cpp
     src/simd_math.cpp
@@ -72,6 +75,9 @@ if(TERNIX_HAS_CUDA)
 endif()
 
 add_library(ternix_core STATIC ${TERNIX_SOURCES})
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(src/i2k.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mavxvnni")
+endif()
 set_target_properties(ternix_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(TERNIX_HAS_CUDA)
     target_compile_definitions(ternix_core PUBLIC TERNIX_HAS_CUDA=1)
@@ -90,7 +96,7 @@ target_link_libraries(ternix_cli PRIVATE ternix_core)
 
 # Tests
 enable_testing()
-add_executable(ternix_tests tests/test_bitpack.cpp tests/test_simd_math.cpp tests/test_ternary_matmul.cpp)
+add_executable(ternix_tests tests/test_bitpack.cpp tests/test_simd_math.cpp tests/test_ternary_matmul.cpp tests/test_i2k.cpp)
 target_link_libraries(ternix_tests PRIVATE ternix_core gtest_main)
 add_test(NAME CoreTests COMMAND ternix_tests)
 
@@ -105,6 +111,10 @@ endif()
 # Benchmarks
 add_executable(bench_simd_math benchmarks/bench_simd_math.cpp)
 target_link_libraries(bench_simd_math PRIVATE ternix_core benchmark::benchmark)
+add_executable(bench_i2k benchmarks/bench_i2k.cpp)
+target_link_libraries(bench_i2k PRIVATE ternix_core)
+add_executable(bench_membw benchmarks/bench_membw.cpp)
+target_link_libraries(bench_membw PRIVATE ternix_core)
 add_executable(bench_end_to_end benchmarks/bench_end_to_end.cpp)
 target_link_libraries(bench_end_to_end PRIVATE ternix_core benchmark::benchmark benchmark::benchmark_main)
 
