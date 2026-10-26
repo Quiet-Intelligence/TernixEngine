@@ -1,8 +1,8 @@
 # Competitor implementations read at source level
 
 Method: the repositories were cloned and the relevant files read (not run). Commits: `microsoft/BitNet` 0b341e5 (2026-07-27), `ggml-org/llama.cpp` d854d98 (build 11889, the
-same commit as the release binaries used in `bench/run_competitors.ps1`). Statements below are what the code says; speed claims are not made here. T-MAC was **not** cloned
-or read (see INDEX S2, level S); entries marked "bound" are my arithmetic on the code, not observations.
+same commit as the release binaries used in `bench/run_competitors.ps1`). Statements below are what the code says; speed claims are not made here. T-MAC is read at README level only
+(see below and INDEX S2); entries marked "bound" are my arithmetic on the code, not observations.
 
 ## bitnet.cpp, I2_S kernel (`src/ggml-bitnet-mad.cpp`)
 
@@ -25,7 +25,21 @@ or read (see INDEX S2, level S); entries marked "bound" are my arithmetic on the
 | the BitNet converter (`conversion/bitnet.py`) loads the vocabulary with `_set_vocab_sentencepiece()`, which requires `tokenizer.model` | the 2B4T checkpoint ships only a BPE `tokenizer.json`; the script patches this one call (diff saved) because the vocabulary does not influence `llama-bench` |
 | `BitnetModel.weight_quant` re-ternarises the weights with the per-tensor absmean rule before writing | the f16 GGUF holds the same ternary values and scale as our `.ternix` conversion; TQ2_0 stores them without further loss apart from the fp16 block scale |
 
+## T-MAC (`microsoft/T-MAC`), README level only (fetched 2026-10-26; source not read, verification level S)
+
+| Fact from the README | Consequence |
+|---|---|
+| ternary support is stated as "W1(.58)A8 from BitNet"; the usage example and the one reported BitNet benchmark use `bitnet_b1_58-3B`; no 2B4T model is mentioned | the model T-MAC demonstrates is the older Llama-style 3B checkpoint (no ReLU^2 / SubLN), which this engine's architecture 1 does not load, so there is no shared model for a head-to-head run without porting one side |
+| end-to-end inference goes through a llama.cpp integration; benchmarks were profiled on llama.cpp b2794 (May 2024), rebased to a newer llama.cpp on 2024-10-10 | the llama.cpp version differs from the b11889 used here; any T-MAC number quoted from the README is tied to a 2024 baseline |
+| build needs Python 3.8 (for TVM), cmake >= 3.22, TVM built from source; on Windows Visual Studio 2019/2022, Clang 17.0.6 and conda | a heavy third-party toolchain on this machine; the auto-mode classifier has denied building third-party source, so this has to be a user-run step |
+| "cannot guarantee significant speedup ... on all x86 platforms"; recommended evaluation devices are Surface Book 3 or ARM | the authors do not claim a gain on x86 desktop CPUs; the i7-14650HX is such a part |
+| no GPU path described (CUDA GPUs appear only as comparison baselines on Jetson); NPU extension noted 2025-05 | GPU comparison is not applicable |
+| reported BitNet 3B: Surface Laptop 7 20 tok/s on 1 core, 48 tok/s on 4 cores (4-5x over llama.cpp); prefill results are marked "TODO" | only decode is reported, on ARM, against a 2024 llama.cpp |
+
+Consequence for the plan: a same-model T-MAC row would need either bitnet_b1_58-3B in this engine (not supported) or a T-MAC conversion of 2B4T (not documented); until one of those exists T-MAC stays a literature comparison
+(reported numbers, different model, different hardware) and must not appear in a ranking table.
+
 ## Open items (not read)
 
-T-MAC (`microsoft/T-MAC`), vlut.cpp, Litespark-Inference and the PrismML llama.cpp fork have not been cloned; INDEX entries S2, S4, S6 and S18 stay at verification level A/S.
+vlut.cpp, Litespark-Inference and the PrismML llama.cpp fork have not been cloned; INDEX entries S4, S6 and S18 stay at verification level A/S; T-MAC is covered at README level above.
 No competitor has been executed on this machine yet: `docs/research/data/competitors/` does not exist until `bench/run_competitors.ps1` is run.
