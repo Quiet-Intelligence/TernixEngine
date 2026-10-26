@@ -22,16 +22,20 @@ namespace {
 // Python-facing engine: owns the mapped model, tokenizer and either the CPU or the CUDA backend.
 class PyEngine {
 public:
-    PyEngine(const std::string& path, bool gpu, int threads, int ctx) : file_(path), tok_(file_.tokenizer_data(), file_.tokenizer_size()) {
+    PyEngine(const std::string& path, bool gpu, int threads, int ctx, const std::string& head, bool sparse_down, bool kv_int8) : file_(path), tok_(file_.tokenizer_data(), file_.tokenizer_size()) {
         if (gpu) {
 #ifdef TERNIX_HAS_CUDA
             gpu_ = std::make_unique<ternix::CudaModel>(file_, ctx);
+            gpu_->set_head_int8(head == "int8");
 #else
             throw std::runtime_error("built without CUDA");
 #endif
         } else {
             file_.prefault();
             cpu_ = std::make_unique<ternix::Model>(file_, threads, ctx);
+            cpu_->set_head(head == "int8" ? ternix::HeadMode::Int8 : (head == "int4" ? ternix::HeadMode::Int4 : ternix::HeadMode::Bf16));
+            if (sparse_down) cpu_->set_sparse_down(true);
+            if (kv_int8) cpu_->set_kv_int8(true);
         }
     }
     std::vector<int32_t> encode(const std::string& text, bool add_bos, bool parse_special) const { return tok_.encode(text, add_bos, parse_special); }
@@ -199,7 +203,8 @@ PYBIND11_MODULE(ternix_engine, m) {
 #endif
           );
     py::class_<PyEngine>(m, "Engine")
-        .def(py::init<const std::string&, bool, int, int>(), py::arg("path"), py::arg("gpu") = false, py::arg("threads") = 0, py::arg("ctx") = 4096)
+        .def(py::init<const std::string&, bool, int, int, const std::string&, bool, bool>(), py::arg("path"), py::arg("gpu") = false, py::arg("threads") = 0, py::arg("ctx") = 4096,
+             py::arg("head") = "bf16", py::arg("sparse_down") = false, py::arg("kv_int8") = false)
         .def("encode", &PyEngine::encode, py::arg("text"), py::arg("add_bos") = true, py::arg("parse_special") = true)
         .def("decode", &PyEngine::decode)
         .def("logits", &PyEngine::logits, py::arg("ids"), py::arg("all") = false)

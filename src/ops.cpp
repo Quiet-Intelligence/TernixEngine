@@ -167,5 +167,48 @@ void attend_head(const float* q, const uint16_t* k, const uint16_t* v, size_t le
     }
 }
 
+void quantize_kv(int8_t* dst, float* scale, const float* src, size_t n) {
+    float amax = 0.f;
+    for (size_t i = 0; i < n; ++i) amax = std::max(amax, std::fabs(src[i]));
+    const float s = amax > 0.f ? amax / 127.f : 1.f;
+    const float inv = 1.f / s;
+    for (size_t i = 0; i < n; ++i) dst[i] = static_cast<int8_t>(std::clamp(static_cast<int>(std::nearbyint(src[i] * inv)), -127, 127));
+    *scale = s;
+}
+
+void attend_head_i8(const float* q, const int8_t* k, const float* k_scale, const int8_t* v, const float* v_scale, size_t len, size_t d, float scale,
+                    float* scores, float* out) {
+    float mx = -INFINITY;
+    for (size_t j = 0; j < len; ++j) {
+        const int8_t* kj = k + j * d;
+        __m256 acc = _mm256_setzero_ps();
+        size_t i = 0;
+        for (; i + 8 <= d; i += 8)
+            acc = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(kj + i)))), _mm256_loadu_ps(q + i), acc);
+        float s = hsum(acc);
+        for (; i < d; ++i) s += static_cast<float>(kj[i]) * q[i];
+        s *= scale * k_scale[j];
+        scores[j] = s;
+        mx = std::max(mx, s);
+    }
+    float sum = 0.f;
+    for (size_t j = 0; j < len; ++j) {
+        scores[j] = std::exp(scores[j] - mx);
+        sum += scores[j];
+    }
+    const float inv = 1.f / sum;
+    constexpr size_t kMaxVec = 32;
+    __m256 acc[kMaxVec];
+    const size_t nv = d / 8;
+    for (size_t t = 0; t < nv; ++t) acc[t] = _mm256_setzero_ps();
+    for (size_t j = 0; j < len; ++j) {
+        const __m256 p = _mm256_set1_ps(scores[j] * inv * v_scale[j]);
+        const int8_t* vj = v + j * d;
+        for (size_t t = 0; t < nv; ++t)
+            acc[t] = _mm256_fmadd_ps(p, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(vj + 8 * t)))), acc[t]);
+    }
+    for (size_t t = 0; t < nv; ++t) _mm256_storeu_ps(out + 8 * t, acc[t]);
+}
+
 } // namespace ops
 } // namespace ternix

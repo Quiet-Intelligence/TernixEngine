@@ -133,17 +133,40 @@ void Model::attention(int layer, int n) {
         for (size_t h = 0; h < nh; ++h) ops::rope_apply(q_.data() + t * qdim + h * hd, c, s, hd);
         for (size_t g = 0; g < nkv; ++g) {
             ops::rope_apply(k_.data() + t * kvdim + g * hd, c, s, hd);
-            ops::f32_to_f16(kc + (g * max_ctx_ + pos0 + t) * hd, k_.data() + t * kvdim + g * hd, hd);
-            ops::f32_to_f16(vc + (g * max_ctx_ + pos0 + t) * hd, v_.data() + t * kvdim + g * hd, hd);
+            if (kv_int8_) {
+                const size_t base = ((size_t(layer) * nkv + g) * max_ctx_ + pos0 + t);
+                ops::quantize_kv(kq_.data() + base * hd, kscale_.data() + base, k_.data() + t * kvdim + g * hd, hd);
+                ops::quantize_kv(vq_.data() + base * hd, vscale_.data() + base, v_.data() + t * kvdim + g * hd, hd);
+            } else {
+                ops::f32_to_f16(kc + (g * max_ctx_ + pos0 + t) * hd, k_.data() + t * kvdim + g * hd, hd);
+                ops::f32_to_f16(vc + (g * max_ctx_ + pos0 + t) * hd, v_.data() + t * kvdim + g * hd, hd);
+            }
         }
     }
     const float scale = 1.0f / std::sqrt(static_cast<float>(hd));
     pool_.parallel_for(size_t(n) * nh, [&](size_t task, int tid) {
         const size_t t = task / nh, h = task % nh, g = h / group;
         const size_t len = size_t(pos0) + t + 1;
+        if (kv_int8_) {
+            const size_t base = (size_t(layer) * nkv + g) * max_ctx_;
+            ops::attend_head_i8(q_.data() + t * qdim + h * hd, kq_.data() + base * hd, kscale_.data() + base, vq_.data() + base * hd, vscale_.data() + base, len, hd,
+                                scale, scores_[static_cast<size_t>(tid)].data(), ctx_.data() + t * qdim + h * hd);
+            return;
+        }
         ops::attend_head(q_.data() + t * qdim + h * hd, kc + g * max_ctx_ * hd, vc + g * max_ctx_ * hd, len, hd, scale,
                          scores_[static_cast<size_t>(tid)].data(), ctx_.data() + t * qdim + h * hd);
     });
+}
+
+void Model::set_kv_int8(bool on) {
+    kv_int8_ = on;
+    pos_ = 0;
+    if (!on || kq_.size() != 0) return;
+    const size_t kv = size_t(cfg_.layers) * cfg_.kv_heads * max_ctx_ * cfg_.head_dim;
+    kq_.reset(kv);
+    vq_.reset(kv);
+    kscale_.reset(kv / cfg_.head_dim);
+    vscale_.reset(kv / cfg_.head_dim);
 }
 
 void Model::set_sparse_down(bool on) {

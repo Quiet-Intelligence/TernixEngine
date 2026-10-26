@@ -28,5 +28,11 @@ void rope_apply(float* vec, const float* cos_t, const float* sin_t, size_t head_
 void attend_head(const float* q, const uint16_t* k, const uint16_t* v, size_t len, size_t head_dim, float scale,
                  float* scores, float* out);
 
+// int8 K/V variant: each cached vector has one float scale (per token and kv head).
+//   k_scale[j], v_scale[j]: dequantisation steps of position j.
+void quantize_kv(int8_t* dst, float* scale, const float* src, size_t n);
+void attend_head_i8(const float* q, const int8_t* k, const float* k_scale, const int8_t* v, const float* v_scale, size_t len, size_t head_dim,
+                    float scale, float* scores, float* out);
+
 } // namespace ops
 } // namespace ternix

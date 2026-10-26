@@ -65,6 +65,9 @@ public:
     void set_sparse_down(bool on);
     bool sparse_down() const { return sparse_down_; }
     double mean_down_nnz_fraction() const { return sparse_calls_ ? double(sparse_nnz_) / (double(sparse_calls_) * cfg_.ffn) : 0.0; }
+    // int8 KV cache (per token and kv-head scale): halves the cache traffic at long context. Must be set while the sequence is empty.
+    void set_kv_int8(bool on);
+    bool kv_int8() const { return kv_int8_; }
     // logits_mode 3 of forward(): final-norm hidden vectors, hidden[n][H] (input of the head).
 
     // Teacher-forced scoring (see CudaModel::forward_nll): nll[i] for the logits after tokens[i] against targets[i].
@@ -106,6 +109,9 @@ private:
     AlignedBuf<float> attn_out_;
     AlignedBuf<float> rope_cos_, rope_sin_;      // [max_ctx][head_dim/2]
     AlignedBuf<uint16_t> kcache_, vcache_;       // [layer][kv_head][max_ctx][head_dim]
+    bool kv_int8_ = false;
+    AlignedBuf<int8_t> kq_, vq_;                 // int8 variants, same indexing
+    AlignedBuf<float> kscale_, vscale_;          // [layer][kv_head][max_ctx]
     Profile prof_;
 };
 

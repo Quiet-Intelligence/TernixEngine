@@ -40,7 +40,7 @@ struct Args {
     int n = 64, threads = 0, ctx = 4096, pp = 128, tg = 64, reps = 3, ppl_ctx = 512, max_tokens = 0;
     bool chat = false, prompt_set = false, special = true, gpu = false;
     HeadMode head = HeadMode::Bf16;
-    bool sparse_down = false;
+    bool sparse_down = false, no_graph = false, kv_int8 = false, no_tc = false;
     double head_k = 0;   // headeval: k-sigma statistical bound for the int4 head (0 = certified)
     SamplerConfig sampler;
     Isa isa = best_isa();
@@ -82,6 +82,9 @@ Args parse(int argc, char** argv) {
         else if (s == "--chat") a.chat = true;
         else if (s == "--gpu") a.gpu = true;
         else if (s == "--configs") a.configs = next();
+        else if (s == "--no-graph") a.no_graph = true;
+        else if (s == "--no-tc") a.no_tc = true;
+        else if (s == "--kv-int8") a.kv_int8 = true;
         else if (s == "--sparse-down") a.sparse_down = true;
         else if (s == "--head-k") a.head_k = std::atof(next());
         else if (s == "--head") {
@@ -427,6 +430,9 @@ int main(int argc, char** argv) {
         if (a.gpu) {
 #ifdef TERNIX_HAS_CUDA
             CudaModel model(file, a.ctx);
+            model.set_head_int8(a.head == HeadMode::Int8);
+            if (a.no_graph) model.set_graph(false);
+            if (a.no_tc) model.set_tensor_cores(false);
             return run(model, tok, a);
 #else
             std::fprintf(stderr, "this build has no CUDA support\n");
@@ -437,6 +443,7 @@ int main(int argc, char** argv) {
         Model model(file, a.threads, a.ctx, a.isa);
         model.set_head(a.head);
         if (a.sparse_down) model.set_sparse_down(true);
+        if (a.kv_int8) model.set_kv_int8(true);
         return run(model, tok, a);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());

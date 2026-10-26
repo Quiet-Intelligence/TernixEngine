@@ -65,3 +65,30 @@ TEST(CudaEngine, RmsnormQuantMatchesCpu) {
         }
     }
 }
+
+TEST(CudaEngine, TensorCoreGemmMatchesCpuKernelExactly) {
+    std::mt19937 rng(31);
+    for (int M : {9, 16, 17, 33, 48, 64})
+        for (auto [N, K] : {std::pair<int, int>{64, 128}, {128, 256}, {640, 2560}, {192, 6912}}) {
+            std::vector<int8_t> w(size_t(N) * K), q(size_t(M) * K);
+            for (auto& v : w) v = static_cast<int8_t>(int(rng() % 3) - 1);
+            for (auto& v : q) v = static_cast<int8_t>(int(rng() % 256) - 128);
+            std::vector<uint8_t> wp(size_t(N) * K / 4);
+            i2k::pack(w.data(), wp.data(), N, K);
+            std::vector<int32_t> sumq(M);
+            std::vector<float> deq(M);
+            for (int t = 0; t < M; ++t) {
+                for (int k = 0; k < K; ++k) sumq[t] += q[size_t(t) * K + k];
+                deq[t] = 0.01f * float(t + 1);
+            }
+            const float scale = 0.037f;
+            std::vector<float> y(size_t(M) * N);
+            cuda_test_ternary_mma(wp.data(), q.data(), deq.data(), sumq.data(), scale, y.data(), M, N, K);
+            for (int t = 0; t < M; ++t) {
+                std::vector<int32_t> ref(N);
+                i2k::gemv(wp.data(), q.data() + size_t(t) * K, sumq[t], ref.data(), 0, N, K, Isa::Scalar);
+                for (int n = 0; n < N; ++n)
+                    ASSERT_FLOAT_EQ(y[size_t(t) * N + n], static_cast<float>(ref[n]) * (deq[t] * scale)) << "M=" << M << " N=" << N << " K=" << K << " t=" << t << " n=" << n;
+            }
+        }
+}

@@ -27,6 +27,12 @@ public:
     bool forward_nll(const int32_t* tokens, int n, const int32_t* targets, float* nll, int32_t* argmax = nullptr);
     // Greedy decode fast path: feed one token, return argmax of the next-token logits without copying them to the host.
     int32_t step_argmax(int32_t token);
+    // Certified-exact int8 output head for batch-1 decode (same scheme as the CPU OutputHead); builds the int8 copy on first use.
+    void set_head_int8(bool on);
+    // CUDA-graph replay of the n == 1 decode step (default on).
+    void set_graph(bool on);
+    // int8 tensor-core GEMM (mma.sync m16n8k32) for chunks of more than 8 tokens (default on); off = dp4a kernels only.
+    void set_tensor_cores(bool on);
     static constexpr int kMaxChunk = 64;
     size_t device_bytes() const;
 
@@ -44,6 +50,7 @@ namespace ternix {
 // y[t][n] = (sum_k q[t][k] W[n][k] - sum_q[t]) * deq[t] * scale for nt tokens (1..8), W in I2K128.
 void cuda_test_ternary_gemv(const uint8_t* W, const int8_t* q, const float* deq, const int32_t* sumq, float scale, float* y, int nt, int N, int K);
 // RMSNorm + absmax int8 quantisation of nt rows (mode 0) -> q (nt*K), deq (nt), sumq (nt)
+void cuda_test_ternary_mma(const uint8_t* W, const int8_t* q, const float* deq, const int32_t* sumq, float scale, float* y, int M, int N, int K);
 void cuda_test_rmsnorm_quant(const float* x, const float* w, float eps, int nt, int K, int8_t* q, float* deq, int32_t* sumq);
 }
 #endif
