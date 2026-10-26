@@ -54,7 +54,7 @@ def collect_env(membw_exe: str | None) -> dict:
     except Exception as e:  # environment probes are best effort
         env["probe_error"] = str(e)
     if membw_exe:
-        out = run([membw_exe])
+        out = run([str(Path(membw_exe).resolve())])
         env["membw_gbps"] = {int(m[0]): float(m[1]) for m in re.findall(r"threads\s+(\d+):\s+([\d.]+) GB/s", out)}
     return env
 

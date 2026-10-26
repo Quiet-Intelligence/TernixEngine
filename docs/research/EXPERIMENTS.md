@@ -232,3 +232,35 @@ The hypothesis (>= 1.05x faster) is falsified. Without AVX-512 the decode of a b
 memory ceiling. This agrees with the one instruction-bound platform in the BITCOS paper (S5, Lunar Lake) and indicates that its gains need either
 AVX-512 `pdep`/mask registers or a wide memory system. Not tested: a GPU variant, AVX-512 hardware, or per-block adaptive fallback (moot
 because every shape lost). Layout stays I2K128.
+
+## EXP-008 outcome: tensor-core W1.58A8 prefill
+
+`mma.sync.m16n8k32` kernel on a byte-permuted weight copy (`ternary_mma_kernel`), bit-identical to the CPU reference and to the dp4a kernel
+(`CudaEngine.TensorCoreGemmMatchesCpuKernelExactly`, M in {9..64}, K up to 6912). GPU prefill, interleaved harness (`speed_ternix_phases.json`,
+pp128, 7 rounds, median): baseline commit d264a0d (dp4a): 1226 tok/s; current: 3478 tok/s (bf16 head) / 3565 tok/s (int8 head), i.e. 2.8-2.9x. A
+controlled toggle in the current build (`--no-tc`): pp64 1149 -> 3532 tok/s (3.1x), pp512 906 -> 2326 tok/s (2.6x; 2700 tok/s after
+vectorising the prefill attention scores). H8 (>= 5x) is falsified end to end: after the GEMMs are accelerated the prefill is limited by the
+attention kernel (44% of the time at pp512 before the vectorised score loop) and by normalisation/quantisation kernels, which were not tensor-core work. Not
+measured: achieved int8 TOPS per kernel (nsys shows the GEMM share of the profile only).
+
+## Phase summary: baseline engine vs improved engine (same session, interleaved rounds)
+
+`docs/research/data/speed_ternix_phases.json` (pp128 / tg64, 7 rounds, median (min..max)); the harness crashed after the rounds while collecting
+environment data and the table was reconstructed from its log (noted in the file):
+
+| engine | prefill tok/s | decode tok/s | bytes/token (MB) |
+|---|---:|---:|---:|
+| ternix baseline CPU (d264a0d), bf16 head | 245.5 (202.4..280.9) | 24.94 (24.10..25.51) | 1177 |
+| ternix CPU, bf16 head (current kernels) | 261.0 (157.5..337.2) | 24.40 (23.94..24.63) | 1177 |
+| ternix CPU, certified int8 head | 447.0 (417.9..455.0) | 32.22 (29.77..33.48) | 850 |
+| ternix CPU, int8 head + sparse down | 178.7 (161.8..179.7) | 31.99 (31.33..34.27) | ~803 |
+| ternix CPU, int4 head + sparse down | 256.1 (217.2..328.6) | 33.22 (32.35..34.22) | ~658 |
+| ternix baseline GPU (d264a0d), dp4a, no graph | 1226 (1140..1241) | 137.3 (129.5..148.2) | 1177 |
+| ternix GPU, bf16 head | 3478 (3342..3503) | 211.5 (193.6..212.5) | 1177 |
+| ternix GPU, certified int8 head | 3565 (3123..3582) | 257.4 (244.0..259.6) | 850 |
+
+Reading: CPU decode was already at the memory ceiling in the baseline (24.9 tok/s x 1177 MB = 29 GB/s); the gains come from moving fewer bytes
+(int8 head: 1.29x, int4 + sparse: 1.33x here, 1.38x in the paired in-process test). The CPU prefill column is noisy (a single 128-token pass is
+0.4-0.7 s, min..max spans 1.7x) and the head mode cannot affect it, so the differences between its rows are noise, not effects. On the GPU the same
+byte reduction compounds with CUDA-graph replay (launch overhead), tensor cores and split-KV attention: decode 1.88x, prefill 2.9x over the
+baseline commit.
