@@ -1,0 +1,62 @@
+"""End-to-end engine checks on a converted model (skipped when models/bitnet-2b4t.ternix is absent).
+CPU vs GPU agreement, determinism, KV-cache consistency, teacher-forced NLL vs logits, and a factual sanity prompt."""
+import os
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+ternix = pytest.importorskip("ternix_engine")
+MODEL = Path(os.environ.get("TERNIX_MODEL", Path(__file__).resolve().parent.parent / "models" / "bitnet-2b4t.ternix"))
+pytestmark = pytest.mark.skipif(not MODEL.exists(), reason="model not present")
+
+
+def log_softmax(x):
+    x = x - x.max(-1, keepdims=True)
+    return x - np.log(np.exp(x).sum(-1, keepdims=True))
+
+
+@pytest.fixture(scope="module")
+def cpu():
+    return ternix.Engine(str(MODEL), gpu=False, ctx=512)
+
+
+@pytest.fixture(scope="module")
+def gpu():
+    if not getattr(ternix, "has_cuda", False):
+        pytest.skip("built without CUDA")
+    return ternix.Engine(str(MODEL), gpu=True, ctx=512)
+
+
+def test_factual_prompt(cpu):
+    assert "Paris" in cpu.generate("The capital of France is", n=6)
+
+
+def test_deterministic_and_prefix_consistent(cpu):
+    ids = cpu.encode("The quick brown fox jumps over the lazy dog.", True, True)
+    a = cpu.logits(ids)
+    b = cpu.logits(ids)
+    np.testing.assert_array_equal(a, b)
+    # logits of the last position of a prefix must equal the matching row of the all-positions run
+    full = cpu.logits(ids, all=True)
+    np.testing.assert_allclose(full[-1], a, rtol=0, atol=2e-3)
+    np.testing.assert_allclose(cpu.logits(ids[:5]), full[4], rtol=0, atol=2e-3)
+
+
+def test_nll_matches_logits(cpu):
+    ids = cpu.encode("Ternary weights take the values minus one, zero and plus one.", True, True)
+    lg = log_softmax(cpu.logits(ids, all=True))
+    nll, am = cpu.nll(ids[:-1], ids[1:])
+    ref = -lg[np.arange(len(ids) - 1), ids[1:]]
+    np.testing.assert_allclose(nll, ref, atol=2e-3)
+    np.testing.assert_array_equal(am, lg[:-1].argmax(-1))
+
+
+def test_gpu_agrees_with_cpu(cpu, gpu):
+    ids = cpu.encode("In 1969, Neil Armstrong became the first person to walk on the Moon.", True, True)
+    a, b = cpu.logits(ids), gpu.logits(ids)
+    pa, pb = np.exp(log_softmax(a)), np.exp(log_softmax(b))
+    kl = float((pa * (np.log(np.maximum(pa, 1e-30)) - log_softmax(b))).sum())
+    assert kl < 2.5e-2, kl   # W1.58A8 noise floor, see docs/research/EXPERIMENTS.md EXP-001
+    assert a.argmax() == b.argmax()
+    assert set(np.argsort(-a)[:3]) == set(np.argsort(-b)[:3])

@@ -59,25 +59,37 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(pybind11)
 
 set(TERNIX_SOURCES 
+    src/cpu_features.cpp
+    src/threadpool.cpp
+    src/i2k.cpp
     src/mul_mat_ternary.cpp
     src/tensor.cpp
     src/simd_math.cpp
     src/bitpack.cpp
+    src/format.cpp
+    src/tokenizer.cpp
+    src/ops.cpp
+    src/sampler.cpp
     src/model.cpp
-    src/transformer.cpp
 )
 
 if(TERNIX_HAS_CUDA)
-    list(APPEND TERNIX_SOURCES src/cuda_kernels.cu)
+    list(APPEND TERNIX_SOURCES src/cuda_kernels.cu src/cuda_engine.cu)
 endif()
 
 add_library(ternix_core STATIC ${TERNIX_SOURCES})
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    set_source_files_properties(src/i2k.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mavxvnni")
+endif()
 set_target_properties(ternix_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(TERNIX_HAS_CUDA)
     target_compile_definitions(ternix_core PUBLIC TERNIX_HAS_CUDA=1)
 endif()
 target_include_directories(ternix_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ternix_core PUBLIC OpenMP::OpenMP_CXX)
+if(TERNIX_HAS_CUDA)
+    target_link_libraries(ternix_core PUBLIC CUDA::cudart)
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(ternix_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mavx2> $<$<COMPILE_LANGUAGE:CXX>:-mfma> $<$<COMPILE_LANGUAGE:CXX>:-O3>)
@@ -90,12 +102,12 @@ target_link_libraries(ternix_cli PRIVATE ternix_core)
 
 # Tests
 enable_testing()
-add_executable(ternix_tests tests/test_bitpack.cpp tests/test_simd_math.cpp tests/test_ternary_matmul.cpp)
+add_executable(ternix_tests tests/test_bitpack.cpp tests/test_simd_math.cpp tests/test_ternary_matmul.cpp tests/test_i2k.cpp)
 target_link_libraries(ternix_tests PRIVATE ternix_core gtest_main)
 add_test(NAME CoreTests COMMAND ternix_tests)
 
 if(TERNIX_HAS_CUDA)
-    add_executable(ternix_cuda_tests tests/test_cuda_matmul.cu)
+    add_executable(ternix_cuda_tests tests/test_cuda_matmul.cu tests/test_cuda_engine.cu)
     target_link_libraries(ternix_cuda_tests PRIVATE ternix_core gtest_main CUDA::cudart)
     add_test(NAME CudaTests COMMAND ternix_cuda_tests)
     add_executable(bench_cuda benchmarks/bench_cuda.cu)
@@ -105,16 +117,16 @@ endif()
 # Benchmarks
 add_executable(bench_simd_math benchmarks/bench_simd_math.cpp)
 target_link_libraries(bench_simd_math PRIVATE ternix_core benchmark::benchmark)
-add_executable(bench_end_to_end benchmarks/bench_end_to_end.cpp)
-target_link_libraries(bench_end_to_end PRIVATE ternix_core benchmark::benchmark benchmark::benchmark_main)
+add_executable(bench_i2k benchmarks/bench_i2k.cpp)
+target_link_libraries(bench_i2k PRIVATE ternix_core)
+add_executable(bench_membw benchmarks/bench_membw.cpp)
+target_link_libraries(bench_membw PRIVATE ternix_core)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(bench_simd_math PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mavx2> $<$<COMPILE_LANGUAGE:CXX>:-mfma> $<$<COMPILE_LANGUAGE:CXX>:-O3>)
-    target_compile_options(bench_end_to_end PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mavx2> $<$<COMPILE_LANGUAGE:CXX>:-mfma> $<$<COMPILE_LANGUAGE:CXX>:-O3>)
     target_compile_options(ternix_cli PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-mavx2> $<$<COMPILE_LANGUAGE:CXX>:-mfma> $<$<COMPILE_LANGUAGE:CXX>:-O3>)
 elseif(MSVC)
     target_compile_options(bench_simd_math PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2> $<$<COMPILE_LANGUAGE:CXX>:/O2>)
-    target_compile_options(bench_end_to_end PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2> $<$<COMPILE_LANGUAGE:CXX>:/O2>)
     target_compile_options(ternix_cli PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/arch:AVX2> $<$<COMPILE_LANGUAGE:CXX>:/O2>)
 endif()
 

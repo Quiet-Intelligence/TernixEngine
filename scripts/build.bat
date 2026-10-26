@@ -9,7 +9,7 @@ set "VCVARS=%ProgramFiles%\Microsoft Visual Studio\18\Community\VC\Auxiliary\Bui
 if not exist "%VCVARS%" set "VCVARS=%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
 if not exist "%VCVARS%" ( echo vcvars64.bat not found & exit /b 1 )
 call "%VCVARS%" >nul || exit /b 1
-set "EXTRA="
+set "EXTRA=%TERNIX_CMAKE_ARGS%"
 :args
 if "%~1"=="" goto run
 set "EXTRA=%EXTRA% %~1"
