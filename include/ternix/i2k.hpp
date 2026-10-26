@@ -25,6 +25,16 @@ inline size_t row_bytes(size_t K) { return K / 4; }
 // Returns the dequantisation step amax'/127 in *deq_step and the sum of q (needed by the dot-product correction).
 void quantize_act(const float* x, int8_t* q, size_t K, float* deq_step, int32_t* sum_q, Isa isa);
 
+// Per-128-column block activation quantisation (for group-scaled weights): block b of the row gets its own step
+// deq[b] = max(amax_b, 1e-5) / 127 and sum[b] = sum of its int8 values.
+void quantize_act_blocks(const float* x, int8_t* q, size_t K, float* deq, int32_t* sum, Isa isa);
+
+// Group-scaled ternary GEMM (one fp16 scale per 128 input columns and output row, gs[n][K/128]) on block-quantised activations:
+//   y[m][i] = sum_b gs[n][b] * deq[m][b] * (sum_{k in b} q[m][k] * W[n][k]) , computed as sum_b c_b * (dot_b - sum_q_b) in float.
+// q rows have stride K; deq / sum_q have stride K/128. Output float, y[m * y_stride + (n - n0)].
+void gemm_rows_gs(const uint8_t* W, const uint16_t* gs, const int8_t* q, const float* deq, const int32_t* sum_q, size_t MR, float* y, size_t y_stride,
+                  size_t n0, size_t n1, size_t K, Isa isa);
+
 // y[i] = sum_k q[k] * W[n0 + i][k] for i in [0, n1 - n0): exact int32.
 void gemv(const uint8_t* W, const int8_t* q, int32_t sum_q, int32_t* y, size_t n0, size_t n1, size_t K, Isa isa);
 

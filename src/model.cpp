@@ -23,6 +23,11 @@ Linear load_linear(const ModelFile& f, const std::string& name) {
     l.N = t.dims[0];
     l.K = t.dims[1];
     l.scale = t.scale;
+    if (const TensorView* g = f.find(name + ".gscale")) {
+        if (g->dtype != DType::F16 || g->nbytes != l.N * (l.K / i2k::kBlock) * 2) throw std::runtime_error("ternix: bad group scales for '" + name + "'");
+        l.gs = reinterpret_cast<const uint16_t*>(g->data);
+        l.scale = 1.f;
+    }
     if (l.K % i2k::kBlock) throw std::runtime_error("ternix: K of '" + name + "' is not a multiple of 128");
     return l;
 }
@@ -41,10 +46,11 @@ Model::Model(const ModelFile& file, int threads, int max_ctx, Isa isa)
     const size_t H = cfg_.hidden, F = cfg_.ffn, hd = cfg_.head_dim;
     const size_t qdim = size_t(cfg_.heads) * hd, kvdim = size_t(cfg_.kv_heads) * hd;
     if (hd % 8 != 0 || hd > 256) throw std::runtime_error("ternix: unsupported head_dim");
-    if (cfg_.act != ModelConfig::Act::Relu2Glu || !cfg_.subln) throw std::runtime_error("ternix: only the BitNet block (relu2 + sub-norms) is implemented");
+    if (cfg_.arch != 1 && cfg_.arch != 2) throw std::runtime_error("ternix: unknown architecture");
 
     const TensorView& emb = file.get("model.embed_tokens.weight");
-    if (emb.dtype != DType::BF16) throw std::runtime_error("ternix: embedding must be bf16");
+    if (emb.dtype != DType::BF16 && emb.dtype != DType::F16) throw std::runtime_error("ternix: embedding must be bf16 or fp16");
+    embed_f16_ = emb.dtype == DType::F16;
     embed_ = reinterpret_cast<const uint16_t*>(emb.data);
     final_norm_ = load_f32(file, "model.norm.weight", H);
     for (uint32_t l = 0; l < cfg_.layers; ++l) {
@@ -59,15 +65,22 @@ Model::Model(const ModelFile& file, int threads, int max_ctx, Isa isa)
         w.down = load_linear(file, p + "mlp.down_proj.weight");
         w.in_norm = load_f32(file, p + "input_layernorm.weight", H);
         w.post_norm = load_f32(file, p + "post_attention_layernorm.weight", H);
-        w.attn_sub = load_f32(file, p + "self_attn.attn_sub_norm.weight", qdim);
-        w.ffn_sub = load_f32(file, p + "mlp.ffn_sub_norm.weight", F);
+        if (cfg_.subln) {
+            w.attn_sub = load_f32(file, p + "self_attn.attn_sub_norm.weight", qdim);
+            w.ffn_sub = load_f32(file, p + "mlp.ffn_sub_norm.weight", F);
+        }
+        if (cfg_.qk_norm) {
+            w.q_norm = load_f32(file, p + "self_attn.q_norm.weight", hd);
+            w.k_norm = load_f32(file, p + "self_attn.k_norm.weight", hd);
+        }
         layers_.push_back(w);
     }
     const size_t B = kMaxChunk;
     x_.reset(B * H); xn_.reset(B * H); q_.reset(B * qdim); k_.reset(B * kvdim); v_.reset(B * kvdim);
     ctx_.reset(B * qdim); gate_.reset(B * F); up_.reset(B * F); hid_.reset(B * F); tmp_.reset(B * H);
     q8_.reset(B * std::max(H, F));
-    deq_.reset(B); sumq_.reset(B);
+    const size_t nbmax = std::max({H, F, qdim}) / i2k::kBlock;
+    deq_.reset(B * nbmax); sumq_.reset(B * nbmax);   // per token, or per (token, 128-block) for block-quantised activations
     scores_.resize(static_cast<size_t>(pool_.size()));
     for (auto& s : scores_) s.reset(static_cast<size_t>(max_ctx_) + 16);
     attn_out_.reset(B * qdim);
@@ -75,11 +88,18 @@ Model::Model(const ModelFile& file, int threads, int max_ctx, Isa isa)
     const size_t half = hd / 2;
     rope_cos_.reset(size_t(max_ctx_) * half);
     rope_sin_.reset(size_t(max_ctx_) * half);
+    std::vector<double> inv_freq(half);
+    if (const TensorView* t = file.find("rope.inv_freq")) {   // precomputed by the converter (e.g. YaRN)
+        if (t->nbytes != half * 4) throw std::runtime_error("ternix: bad rope.inv_freq");
+        const float* f = reinterpret_cast<const float*>(t->data);
+        for (size_t i = 0; i < half; ++i) inv_freq[i] = f[i];
+    } else {
+        for (size_t i = 0; i < half; ++i) inv_freq[i] = std::pow(static_cast<double>(cfg_.rope_theta), -2.0 * static_cast<double>(i) / static_cast<double>(hd));
+    }
     for (int p = 0; p < max_ctx_; ++p)
         for (size_t i = 0; i < half; ++i) {
-            const double freq = std::pow(static_cast<double>(cfg_.rope_theta), -2.0 * static_cast<double>(i) / static_cast<double>(hd));
-            rope_cos_[size_t(p) * half + i] = static_cast<float>(std::cos(p * freq));
-            rope_sin_[size_t(p) * half + i] = static_cast<float>(std::sin(p * freq));
+            rope_cos_[size_t(p) * half + i] = static_cast<float>(std::cos(p * inv_freq[i]) * cfg_.rope_attn_factor);
+            rope_sin_[size_t(p) * half + i] = static_cast<float>(std::sin(p * inv_freq[i]) * cfg_.rope_attn_factor);
         }
     const size_t kv = size_t(cfg_.layers) * cfg_.kv_heads * max_ctx_ * hd;
     kcache_.reset(kv);
@@ -87,8 +107,11 @@ Model::Model(const ModelFile& file, int threads, int max_ctx, Isa isa)
 }
 
 void Model::quantize_rows(const float* x, int n, size_t K) {
-    for (int t = 0; t < n; ++t)
-        i2k::quantize_act(x + t * K, q8_.data() + t * K, K, &deq_[t], &sumq_[t], isa_);
+    const size_t nb = K / i2k::kBlock;
+    for (int t = 0; t < n; ++t) {
+        if (cfg_.act_block) i2k::quantize_act_blocks(x + t * K, q8_.data() + t * K, K, &deq_[t * nb], &sumq_[t * nb], isa_);
+        else i2k::quantize_act(x + t * K, q8_.data() + t * K, K, &deq_[t], &sumq_[t], isa_);
+    }
 }
 
 // One parallel region over the output-row chunks of every job (jobs share the already-quantised activations).
@@ -105,8 +128,20 @@ void Model::run_linears(const Job* jobs, int njobs, int n) {
         const Job& job = jobs[s.job];
         const Linear& L = *job.lin;
         alignas(32) int32_t y[4][kChunk];
+        alignas(32) float yf[4][kChunk];
         for (int m0 = 0; m0 < n; m0 += 4) {
             const int mr = std::min(4, n - m0);
+            if (L.gs) {   // group-scaled weights, block-quantised activations: the kernel returns scaled floats
+                const size_t nb = K / i2k::kBlock;
+                i2k::gemm_rows_gs(L.w, L.gs, q8_.data() + size_t(m0) * K, deq_.data() + size_t(m0) * nb, sumq_.data() + size_t(m0) * nb, static_cast<size_t>(mr),
+                                  &yf[0][0], kChunk, s.n0, s.n1, K, isa);
+                for (int m = 0; m < mr; ++m) {
+                    float* out = job.out + size_t(m0 + m) * L.N + s.n0;
+                    if (job.accumulate) for (size_t i = 0; i < s.n1 - s.n0; ++i) out[i] += yf[m][i];
+                    else for (size_t i = 0; i < s.n1 - s.n0; ++i) out[i] = yf[m][i];
+                }
+                continue;
+            }
             i2k::gemm_rows(L.w, q8_.data() + size_t(m0) * K, sumq_.data() + m0, static_cast<size_t>(mr), &y[0][0], kChunk, s.n0, s.n1, K, isa);
             for (int m = 0; m < mr; ++m) {
                 const float f = deq_[m0 + m] * L.scale;
@@ -127,6 +162,14 @@ void Model::attention(int layer, int n) {
     uint16_t* kc = kcache_.data() + size_t(layer) * nkv * max_ctx_ * hd;
     uint16_t* vc = vcache_.data() + size_t(layer) * nkv * max_ctx_ * hd;
 
+    // QK-norm (Qwen3-style): RMSNorm over every query / key head before the rotary embedding
+    if (cfg_.qk_norm) {
+        const LayerWeights& lw = layers_[static_cast<size_t>(layer)];
+        for (int t = 0; t < n; ++t) {
+            for (size_t h = 0; h < nh; ++h) rms_norm_avx2(q_.data() + t * qdim + h * hd, q_.data() + t * qdim + h * hd, lw.q_norm, hd, cfg_.rms_eps);
+            for (size_t g = 0; g < nkv; ++g) rms_norm_avx2(k_.data() + t * kvdim + g * hd, k_.data() + t * kvdim + g * hd, lw.k_norm, hd, cfg_.rms_eps);
+        }
+    }
     // rotary embedding on q and k, then append k/v (fp16) to the cache
     for (int t = 0; t < n; ++t) {
         const float* c = rope_cos_.data() + size_t(pos0 + t) * half;
@@ -191,6 +234,7 @@ void Model::set_kv_int8(bool on) {
 }
 
 void Model::set_sparse_down(bool on) {
+    if (on && (cfg_.group != 0 || cfg_.act != ModelConfig::Act::Relu2Glu)) return;   // only meaningful for ReLU^2 FFNs with per-token activations
     sparse_down_ = on;
     if (!on || !down_k_.empty()) return;
     down_k_.resize(layers_.size());
@@ -208,7 +252,7 @@ void Model::set_head(HeadMode mode) {
     if (mode == HeadMode::Bf16) return;
     auto& h = heads_[static_cast<int>(mode)];
     if (!h) {
-        h = std::make_unique<OutputHead>(embed_, cfg_.vocab, cfg_.hidden, mode, pool_);
+        h = std::make_unique<OutputHead>(embed_, cfg_.vocab, cfg_.hidden, mode, pool_, embed_f16_);
         // int4: the worst-case bound would keep ~every row as a candidate; use the 6.5-sigma statistical bound (see head.hpp)
         if (mode == HeadMode::Int4) h->set_bound_scale(6.5 / std::sqrt(static_cast<double>(cfg_.hidden)));
     }
@@ -226,7 +270,8 @@ void Model::lm_head(const float* xn, int n, float* logits, bool decode) {
         const size_t v0 = c * kChunk, v1 = std::min(V, v0 + kChunk);
         float tmp[kMaxChunk];
         for (size_t v = v0; v < v1; ++v) {
-            ops::dot_bf16_rows(embed_ + v * H, xn, static_cast<size_t>(n), H, tmp);
+            if (embed_f16_) ops::dot_f16_rows(embed_ + v * H, xn, static_cast<size_t>(n), H, tmp);
+            else ops::dot_bf16_rows(embed_ + v * H, xn, static_cast<size_t>(n), H, tmp);
             for (int t = 0; t < n; ++t) logits[size_t(t) * V + v] = tmp[t];
         }
     });
@@ -240,9 +285,13 @@ void Model::chunk_forward(const int32_t* tokens, int n, float* logits, int logit
     // embedding lookup (bf16 -> f32)
     for (int t = 0; t < n; ++t) {
         const uint16_t* row = embed_ + size_t(tokens[t]) * H;
-        for (size_t i = 0; i < H; ++i) {
-            uint32_t b = uint32_t(row[i]) << 16;
-            std::memcpy(&x_[size_t(t) * H + i], &b, 4);
+        if (embed_f16_) {
+            for (size_t i = 0; i < H; ++i) x_[size_t(t) * H + i] = ops::f16_to_f32_scalar(row[i]);
+        } else {
+            for (size_t i = 0; i < H; ++i) {
+                uint32_t b = uint32_t(row[i]) << 16;
+                std::memcpy(&x_[size_t(t) * H + i], &b, 4);
+            }
         }
     }
     auto norm = [&](float* out, const float* in, const float* w, size_t len, int rows) {
@@ -272,7 +321,7 @@ void Model::chunk_forward(const int32_t* tokens, int n, float* logits, int logit
             attention(static_cast<int>(l), n);
             prof_.attn_ms += ms_since(t);
         }
-        norm(ctx_.data(), ctx_.data(), w.attn_sub, qdim, n);
+        if (w.attn_sub) norm(ctx_.data(), ctx_.data(), w.attn_sub, qdim, n);
         quant(ctx_.data(), qdim);
         const Job o[1] = {{&w.o, x_.data(), true}};
         linears(o, 1);
@@ -281,8 +330,11 @@ void Model::chunk_forward(const int32_t* tokens, int n, float* logits, int logit
         quant(xn_.data(), H);
         const Job gu[2] = {{&w.gate, gate_.data(), false}, {&w.up, up_.data(), false}};
         linears(gu, 2);
-        for (int t = 0; t < n; ++t) ops::relu2_mul(hid_.data() + t * F, gate_.data() + t * F, up_.data() + t * F, F);
-        norm(hid_.data(), hid_.data(), w.ffn_sub, F, n);
+        for (int t = 0; t < n; ++t) {
+            if (cfg_.act == ModelConfig::Act::Relu2Glu) ops::relu2_mul(hid_.data() + t * F, gate_.data() + t * F, up_.data() + t * F, F);
+            else ops::silu_mul(hid_.data() + t * F, gate_.data() + t * F, up_.data() + t * F, F);
+        }
+        if (w.ffn_sub) norm(hid_.data(), hid_.data(), w.ffn_sub, F, n);
         quant(hid_.data(), F);
         if (sparse_down_ && n == 1) {
             auto t = clk::now();

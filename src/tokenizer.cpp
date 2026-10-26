@@ -90,6 +90,40 @@ Tokenizer::Tokenizer(const uint8_t* blob, size_t size) {
             (*ranges)[i] = {lo, hi};
         }
     }
+    if (b.pos + 4 <= b.size) {
+        const uint32_t nc = b.u32();
+        for (uint32_t i = 0; i < nc; ++i) {
+            const uint32_t a = b.u32(), c = b.u32(), r = b.u32();
+            compose_.emplace((static_cast<uint64_t>(a) << 32) | c, r);
+        }
+    }
+}
+
+// Composes adjacent (base, combining) pairs left to right. Full NFC also decomposes and reorders combining marks; this covers
+// the common case (decomposed accents) and is the identity for text that is already normalised.
+std::string Tokenizer::nfc(std::string_view text) const {
+    bool ascii = true;
+    for (unsigned char ch : text)
+        if (ch >= 0x80) { ascii = false; break; }
+    if (compose_.empty() || ascii) return std::string(text);
+    std::vector<uint32_t> cps;
+    for (size_t i = 0; i < text.size();) cps.push_back(next_cp(text, i));
+    std::vector<uint32_t> out;
+    for (uint32_t c : cps) {
+        if (!out.empty()) {
+            auto it = compose_.find((static_cast<uint64_t>(out.back()) << 32) | c);
+            if (it != compose_.end()) { out.back() = it->second; continue; }
+        }
+        out.push_back(c);
+    }
+    std::string r;
+    for (uint32_t c : out) {
+        if (c < 0x80) r += static_cast<char>(c);
+        else if (c < 0x800) { r += static_cast<char>(0xC0 | (c >> 6)); r += static_cast<char>(0x80 | (c & 0x3F)); }
+        else if (c < 0x10000) { r += static_cast<char>(0xE0 | (c >> 12)); r += static_cast<char>(0x80 | ((c >> 6) & 0x3F)); r += static_cast<char>(0x80 | (c & 0x3F)); }
+        else { r += static_cast<char>(0xF0 | (c >> 18)); r += static_cast<char>(0x80 | ((c >> 12) & 0x3F)); r += static_cast<char>(0x80 | ((c >> 6) & 0x3F)); r += static_cast<char>(0x80 | (c & 0x3F)); }
+    }
+    return r;
 }
 
 bool Tokenizer::in_ranges(const std::vector<std::pair<uint32_t, uint32_t>>& r, uint32_t c) {
@@ -141,7 +175,7 @@ std::vector<std::string_view> Tokenizer::pretokenize(std::string_view text) cons
         // 3. up to three digits
         if (end == i && is_number(c)) {
             size_t j = i;
-            while (j < m && j - i < 3 && is_number(cp[j])) ++j;
+            while (j < m && j - i < digits_ && is_number(cp[j])) ++j;
             end = j;
         }
         // 4. optional space, run of symbols, trailing newlines
@@ -180,10 +214,12 @@ std::vector<std::string_view> Tokenizer::pretokenize(std::string_view text) cons
 }
 
 void Tokenizer::bpe_word(std::string_view word, std::vector<int32_t>& out) const {
-    auto whole = token_to_id_.find(std::string(word));
-    if (whole != token_to_id_.end()) {
-        out.push_back(whole->second);
-        return;
+    if (ignore_merges_) {
+        auto whole = token_to_id_.find(std::string(word));
+        if (whole != token_to_id_.end()) {
+            out.push_back(whole->second);
+            return;
+        }
     }
     const size_t n = word.size();
     std::vector<int32_t> id(n), prev(n), next(n);
@@ -227,11 +263,14 @@ void Tokenizer::bpe_word(std::string_view word, std::vector<int32_t>& out) const
 
 std::vector<int32_t> Tokenizer::encode(std::string_view text, bool add_bos, bool parse_special) const {
     std::vector<int32_t> out;
-    if (add_bos) out.push_back(bos_);
+    if (add_bos && use_bos_) out.push_back(bos_);
     size_t seg_start = 0, i = 0;
     auto flush = [&](size_t end) {
         if (end > seg_start)
-            for (std::string_view w : pretokenize(text.substr(seg_start, end - seg_start))) bpe_word(w, out);
+        {
+            const std::string norm = nfc(text.substr(seg_start, end - seg_start));
+            for (std::string_view w : pretokenize(norm)) bpe_word(w, out);
+        }
     };
     while (i < text.size()) {
         bool matched = false;

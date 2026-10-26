@@ -16,6 +16,9 @@ void silu_mul(float* out, const float* gate, const float* up, size_t n);
 // Dot products of one bf16 row with `nvec` float vectors of length n (vectors contiguous, stride n): out[v].
 void dot_bf16_rows(const uint16_t* row, const float* vecs, size_t nvec, size_t n, float* out);
 
+// Same for an fp16 row (tied head of fp16 checkpoints).
+void dot_f16_rows(const uint16_t* row, const float* vecs, size_t nvec, size_t n, float* out);
+
 // fp16 helpers (F16C when present, scalar fallback otherwise)
 void f32_to_f16(uint16_t* dst, const float* src, size_t n);
 float f16_to_f32_scalar(uint16_t h);

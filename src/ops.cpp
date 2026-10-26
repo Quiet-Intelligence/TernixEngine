@@ -79,6 +79,21 @@ void dot_bf16_rows(const uint16_t* row, const float* vecs, size_t nvec, size_t n
     }
 }
 
+void dot_f16_rows(const uint16_t* row, const float* vecs, size_t nvec, size_t n, float* out) {
+    for (size_t v = 0; v < nvec; ++v) {
+        __m256 a0 = _mm256_setzero_ps(), a1 = a0;
+        const float* x = vecs + v * n;
+        size_t i = 0;
+        for (; i + 16 <= n; i += 16) {
+            a0 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(row + i))), _mm256_loadu_ps(x + i), a0);
+            a1 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(row + i + 8))), _mm256_loadu_ps(x + i + 8), a1);
+        }
+        float s = hsum(_mm256_add_ps(a0, a1));
+        for (; i < n; ++i) s += f16_to_f32_scalar(row[i]) * x[i];
+        out[v] = s;
+    }
+}
+
 float f16_to_f32_scalar(uint16_t h) {
     const uint32_t sign = (h & 0x8000u) << 16;
     uint32_t exp = (h >> 10) & 0x1F, man = h & 0x3FF, bits;

@@ -94,6 +94,16 @@ ModelFile::ModelFile(const std::string& path) {
     tok_bytes_ = u[17];
     cfg_.rms_eps = fl[0];
     cfg_.rope_theta = fl[1];
+    if (cfg_.arch == 2) {
+        cfg_.qk_norm = u[18] != 0;
+        cfg_.group = u[19];
+        cfg_.act_block = u[20] != 0;
+        cfg_.head_f16 = u[21] == 2;
+        cfg_.add_bos = u[22] != 0;
+        cfg_.digits = u[23];
+        cfg_.ignore_merges = u[24] != 0;
+        cfg_.rope_attn_factor = fl[2] > 0.f ? fl[2] : 1.f;
+    }
     for (uint32_t i = 0; i < n_tensors; ++i) {
         const uint16_t nl = r.take<uint16_t>();
         std::string name(reinterpret_cast<const char*>(r.bytes(nl)), nl);

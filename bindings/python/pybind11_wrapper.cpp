@@ -23,6 +23,10 @@ namespace {
 class PyEngine {
 public:
     PyEngine(const std::string& path, bool gpu, int threads, int ctx, const std::string& head, bool sparse_down, bool kv_int8) : file_(path), tok_(file_.tokenizer_data(), file_.tokenizer_size()) {
+        {
+            const ternix::ModelConfig& c = file_.config();
+            tok_.configure(c.digits, c.ignore_merges, c.add_bos, static_cast<int32_t>(c.bos));
+        }
         if (gpu) {
 #ifdef TERNIX_HAS_CUDA
             gpu_ = std::make_unique<ternix::CudaModel>(file_, ctx);

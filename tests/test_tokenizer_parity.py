@@ -13,14 +13,18 @@ ternix = pytest.importorskip("ternix_engine")
 tokenizers = pytest.importorskip("tokenizers")
 
 ROOT = Path(__file__).resolve().parent.parent
-MODEL = Path(os.environ.get("TERNIX_MODEL", ROOT / "models" / "bitnet-2b4t.ternix"))
-TOKJSON = Path(os.environ.get("TERNIX_TOKENIZER_JSON", ROOT / "models" / "bitnet-b1.58-2B-4T-bf16" / "tokenizer.json"))
-pytestmark = pytest.mark.skipif(not (MODEL.exists() and TOKJSON.exists()), reason="model files not present")
+PAIRS = {
+    "bitnet": (ROOT / "models" / "bitnet-2b4t.ternix", ROOT / "models" / "bitnet-b1.58-2B-4T-bf16" / "tokenizer.json"),
+    "qwen3": (ROOT / "models" / "bonsai-1p7b.ternix", ROOT / "models" / "Ternary-Bonsai-1.7B-unpacked" / "tokenizer.json"),
+}
 
 
-@pytest.fixture(scope="module")
-def pair():
-    return ternix.Engine(str(MODEL), gpu=False, threads=1, ctx=64), tokenizers.Tokenizer.from_file(str(TOKJSON))
+@pytest.fixture(scope="module", params=sorted(PAIRS))
+def pair(request):
+    model, tokjson = PAIRS[request.param]
+    if not (model.exists() and tokjson.exists()):
+        pytest.skip("model files not present")
+    return ternix.Engine(str(model), gpu=False, threads=1, ctx=64), tokenizers.Tokenizer.from_file(str(tokjson))
 
 
 HAND_WRITTEN = [

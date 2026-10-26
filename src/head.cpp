@@ -32,8 +32,8 @@ inline float f16_bits_to_f32(uint16_t h) { return _mm_cvtss_f32(_mm_cvtph_ps(_mm
 
 } // namespace
 
-OutputHead::OutputHead(const uint16_t* bf16, size_t V, size_t H, HeadMode mode, ThreadPool& pool)
-    : bf16_(bf16), V_(V), H_(H), mode_(mode), pool_(pool) {
+OutputHead::OutputHead(const uint16_t* bf16, size_t V, size_t H, HeadMode mode, ThreadPool& pool, bool f16)
+    : bf16_(bf16), f16_(f16), V_(V), H_(H), mode_(mode), pool_(pool) {
     if (mode == HeadMode::Bf16) return;
     if (H % 32 != 0) throw std::runtime_error("head: hidden size must be a multiple of 32");
     resid_.reset(V);
@@ -48,7 +48,7 @@ OutputHead::OutputHead(const uint16_t* bf16, size_t V, size_t H, HeadMode mode, 
     pool.parallel_for((V + kChunk - 1) / kChunk, [&](size_t c, int) {
         std::vector<float> row(H), deq(H);
         for (size_t v = c * kChunk; v < std::min(V, (c + 1) * kChunk); ++v) {
-            for (size_t i = 0; i < H; ++i) row[i] = bf16_to_f(bf16[v * H + i]);
+            for (size_t i = 0; i < H; ++i) row[i] = f16 ? ops::f16_to_f32_scalar(bf16[v * H + i]) : bf16_to_f(bf16[v * H + i]);
             if (mode == HeadMode::Int8) {
                 float amax = 0.f;
                 for (float f : row) amax = std::max(amax, std::fabs(f));
@@ -96,7 +96,8 @@ size_t OutputHead::compressed_bytes() const {
 
 float OutputHead::exact(const float* x, size_t v) const {
     float r;
-    ops::dot_bf16_rows(bf16_ + v * H_, x, 1, H_, &r);
+    if (f16_) ops::dot_f16_rows(bf16_ + v * H_, x, 1, H_, &r);
+    else ops::dot_bf16_rows(bf16_ + v * H_, x, 1, H_, &r);
     return r;
 }
 

@@ -24,11 +24,15 @@ CONFIG_F32 = 16
 DT_F32, DT_BF16, DT_F16, DT_I2K128 = 0, 1, 2, 3
 DT_NAMES = {DT_F32: "f32", DT_BF16: "bf16", DT_F16: "f16", DT_I2K128: "i2k128"}
 
-# u32 config slots (keep in sync with include/ternix/format.hpp)
+# u32 config slots (keep in sync with include/ternix/format.hpp). Slots 18-24 (arch 2, Qwen3-style group-scaled models):
+# QKNORM 1 = RMSNorm on q/k heads; GROUP = quantisation group (128) with fp16 scales in "<name>.gscale"; ACTBLOCK 1 = activations are
+# quantised per 128-block instead of per token; HEAD_DTYPE 1 bf16 / 2 f16; ADD_BOS; DIGITS = max digits per pre-token (3 Llama-3, 1 Qwen);
+# IGNORE_MERGES 1 = a pre-token that is a vocabulary entry is emitted whole (Llama-3), 0 = always merge (Qwen).
 (C_ARCH, C_VOCAB, C_HIDDEN, C_LAYERS, C_HEADS, C_KV_HEADS, C_HEAD_DIM, C_FFN, C_MAX_POS, C_TIE, C_ACT, C_SUBLN,
- C_BOS, C_EOS, C_EOT, C_NTENSORS, C_TOK_OFF, C_TOK_BYTES) = range(18)
+ C_BOS, C_EOS, C_EOT, C_NTENSORS, C_TOK_OFF, C_TOK_BYTES,
+ C_QKNORM, C_GROUP, C_ACTBLOCK, C_HEAD_DTYPE, C_ADD_BOS, C_DIGITS, C_IGNORE_MERGES) = range(25)
 # f32 config slots
-F_EPS, F_ROPE_THETA = 0, 1
+F_EPS, F_ROPE_THETA, F_ROPE_ATTN = 0, 1, 2
 
 
 def pack_i2k128(w_ternary: np.ndarray) -> np.ndarray:

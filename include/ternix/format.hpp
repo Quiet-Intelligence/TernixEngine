@@ -17,6 +17,15 @@ struct ModelConfig {
     bool subln = true;
     uint32_t bos = 0, eos = 0, eot = 0;
     float rms_eps = 1e-5f, rope_theta = 10000.f;
+    // architecture 2 (Qwen3-style, group-scaled ternary); architecture 1 (BitNet) fixes these to its own values
+    bool qk_norm = false;
+    uint32_t group = 0;            // 0: one scale per tensor; 128: fp16 scale per 128 input columns ("<name>.gscale")
+    bool act_block = false;        // quantise activations per 128-column block instead of per token
+    bool head_f16 = false;         // tied head stored as fp16 instead of bf16
+    bool add_bos = true;
+    uint32_t digits = 3;           // pre-tokenizer: max digits per token
+    bool ignore_merges = true;
+    float rope_attn_factor = 1.f;  // YaRN attention scaling applied to cos/sin
 };
 
 struct TensorView {

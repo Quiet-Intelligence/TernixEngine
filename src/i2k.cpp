@@ -99,6 +99,23 @@ void quantize_act(const float* x, int8_t* q, size_t K, float* deq_step, int32_t*
     else quantize_act_avx2(x, q, K, deq_step, sum_q);
 }
 
+static inline void quantize_act_scalar_or_avx(const float* x, int8_t* q, size_t K, float* d, int32_t* s, Isa isa) {
+    if (isa == Isa::Scalar) quantize_act_scalar(x, q, K, d, s);
+    else quantize_act_avx2(x, q, K, d, s);
+}
+
+void quantize_act_blocks(const float* x, int8_t* q, size_t K, float* deq, int32_t* sum, Isa isa) {
+    (void)isa;
+    for (size_t b = 0; b < K / kBlock; ++b) {
+        int32_t s = 0;
+        float d;
+        // reuse the per-token routine on a 128-element block: identical rounding (rint) and clamp
+        quantize_act_scalar_or_avx(x + b * kBlock, q + b * kBlock, kBlock, &d, &s, isa);
+        deq[b] = d;
+        sum[b] = s;
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // scalar kernels (reference semantics, also the fallback for CPUs without AVX2)
 // ---------------------------------------------------------------------------------------------------------------
@@ -224,6 +241,100 @@ void gemm_rows(const uint8_t* W, const int8_t* q, const int32_t* sum_q, size_t M
 
 void gemv(const uint8_t* W, const int8_t* q, int32_t sum_q, int32_t* y, size_t n0, size_t n1, size_t K, Isa isa) {
     gemm_rows(W, q, &sum_q, 1, y, n1 - n0, n0, n1, K, isa);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// group-scaled GEMM: one 128-column block per scale
+// ---------------------------------------------------------------------------------------------------------------
+static inline float f16_to_f32_bits(uint16_t h) { return _mm_cvtss_f32(_mm_cvtph_ps(_mm_cvtsi32_si128(h))); }
+
+static void gemm_rows_gs_scalar(const uint8_t* W, const uint16_t* gs, const int8_t* q, const float* deq, const int32_t* sum_q, size_t MR, float* y,
+                                size_t y_stride, size_t n0, size_t n1, size_t K) {
+    const size_t nb = K / kBlock;
+    for (size_t n = n0; n < n1; ++n) {
+        const uint8_t* row = W + n * (K / 4);
+        for (size_t m = 0; m < MR; ++m) {
+            double acc = 0;
+            for (size_t b = 0; b < nb; ++b) {
+                int32_t d = 0;
+                for (size_t l = 0; l < 32; ++l) {
+                    const unsigned byte = row[b * 32 + l];
+                    const int8_t* a = q + m * K + b * kBlock + l;
+                    d += a[0] * static_cast<int>(byte & 3) + a[32] * static_cast<int>((byte >> 2) & 3) + a[64] * static_cast<int>((byte >> 4) & 3) +
+                         a[96] * static_cast<int>(byte >> 6);
+                }
+                acc += static_cast<double>(f16_to_f32_bits(gs[n * nb + b])) * deq[m * nb + b] * (d - sum_q[m * nb + b]);
+            }
+            y[m * y_stride + (n - n0)] = static_cast<float>(acc);
+        }
+    }
+}
+
+// MR activation rows x NR weight rows per tile: the weight bytes of NR rows and the activations of MR rows stay in registers / L1 across the K loop.
+template <bool V, int MR, int NR>
+static void gs_tile(const uint8_t* W, const uint16_t* gs, const int8_t* q, const float* deq, const int32_t* sum_q, float* y, size_t y_stride, size_t n,
+                    size_t n0, size_t K) {
+    const size_t nb = K / kBlock, rb = K / 4;
+    const uint8_t* wr[NR];
+    for (int r = 0; r < NR; ++r) wr[r] = W + (n + r) * rb;
+    __m256 lanes[MR][NR];
+    float corr[MR][NR];
+    for (int m = 0; m < MR; ++m)
+        for (int r = 0; r < NR; ++r) { lanes[m][r] = _mm256_setzero_ps(); corr[m][r] = 0.f; }
+    for (size_t b = 0; b < nb; ++b) {
+        __m256i x[NR];
+        float s[NR];
+        for (int r = 0; r < NR; ++r) {
+            x[r] = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wr[r] + b * 32));
+            s[r] = f16_to_f32_bits(gs[(n + r) * nb + b]);
+        }
+        for (int m = 0; m < MR; ++m) {
+            const float d = deq[m * nb + b];
+            const float qs = static_cast<float>(sum_q[m * nb + b]);
+            for (int r = 0; r < NR; ++r) {
+                const __m256i acc = decode_dot<V>(_mm256_setzero_si256(), x[r], q + m * K + b * kBlock);
+                const float c = s[r] * d;
+                lanes[m][r] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(acc), _mm256_set1_ps(c), lanes[m][r]);
+                corr[m][r] += c * qs;
+            }
+        }
+    }
+    for (int m = 0; m < MR; ++m)
+        for (int r = 0; r < NR; ++r) {
+            __m128 h = _mm_add_ps(_mm256_castps256_ps128(lanes[m][r]), _mm256_extractf128_ps(lanes[m][r], 1));
+            h = _mm_add_ps(h, _mm_movehl_ps(h, h));
+            h = _mm_add_ss(h, _mm_shuffle_ps(h, h, 0x55));
+            y[m * y_stride + (n - n0) + r] = _mm_cvtss_f32(h) - corr[m][r];
+        }
+}
+
+template <bool V, int MR>
+static void gs_rows(const uint8_t* W, const uint16_t* gs, const int8_t* q, const float* deq, const int32_t* sum_q, float* y, size_t y_stride, size_t n0,
+                    size_t n1, size_t K) {
+    constexpr int NR = (MR == 1) ? 4 : 2;
+    size_t n = n0;
+    for (; n + NR <= n1; n += NR) gs_tile<V, MR, NR>(W, gs, q, deq, sum_q, y, y_stride, n, n0, K);
+    for (; n < n1; ++n) gs_tile<V, MR, 1>(W, gs, q, deq, sum_q, y, y_stride, n, n0, K);
+}
+
+template <bool V>
+static void gemm_rows_gs_simd(const uint8_t* W, const uint16_t* gs, const int8_t* q, const float* deq, const int32_t* sum_q, size_t MR, float* y,
+                              size_t y_stride, size_t n0, size_t n1, size_t K) {
+    switch (MR) {
+        case 1: gs_rows<V, 1>(W, gs, q, deq, sum_q, y, y_stride, n0, n1, K); break;
+        case 2: gs_rows<V, 2>(W, gs, q, deq, sum_q, y, y_stride, n0, n1, K); break;
+        case 3: gs_rows<V, 3>(W, gs, q, deq, sum_q, y, y_stride, n0, n1, K); break;
+        default: gs_rows<V, 4>(W, gs, q, deq, sum_q, y, y_stride, n0, n1, K); break;
+    }
+}
+
+void gemm_rows_gs(const uint8_t* W, const uint16_t* gs, const int8_t* q, const float* deq, const int32_t* sum_q, size_t MR, float* y, size_t y_stride,
+                  size_t n0, size_t n1, size_t K, Isa isa) {
+    switch (isa) {
+        case Isa::Scalar: gemm_rows_gs_scalar(W, gs, q, deq, sum_q, MR, y, y_stride, n0, n1, K); break;
+        case Isa::Avx2: gemm_rows_gs_simd<false>(W, gs, q, deq, sum_q, MR, y, y_stride, n0, n1, K); break;
+        case Isa::AvxVnni: gemm_rows_gs_simd<true>(W, gs, q, deq, sum_q, MR, y, y_stride, n0, n1, K); break;
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------

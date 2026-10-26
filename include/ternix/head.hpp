@@ -27,7 +27,7 @@ struct HeadStats {
 class OutputHead {
 public:
     // bf16: V x H row-major bf16 (not copied for Bf16 mode; always used for exact rescoring).
-    OutputHead(const uint16_t* bf16, size_t V, size_t H, HeadMode mode, ThreadPool& pool);
+    OutputHead(const uint16_t* rows, size_t V, size_t H, HeadMode mode, ThreadPool& pool, bool f16 = false);
 
     HeadMode mode() const { return mode_; }
     // Scales the certified bound ||x|| r_v. 1.0 (default) is the Cauchy-Schwarz worst case: provably exact greedy output.
@@ -49,7 +49,8 @@ private:
     float exact(const float* x, size_t v) const;
     void score_range(const float* x, size_t v0, size_t v1, float* s) const;
 
-    const uint16_t* bf16_;
+    const uint16_t* bf16_;      // the reference rows (bf16, or fp16 when f16_)
+    bool f16_ = false;
     size_t V_, H_;
     HeadMode mode_;
     ThreadPool& pool_;

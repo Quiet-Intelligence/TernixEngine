@@ -13,6 +13,8 @@ namespace ternix {
 class Tokenizer {
 public:
     Tokenizer(const uint8_t* blob, size_t size);
+    // Pre-tokenizer / BPE variants (BitNet: 3 digits, ignore_merges, BOS; Qwen: 1 digit, merges always applied, no BOS).
+    void configure(uint32_t digits, bool ignore_merges, bool use_bos, int32_t bos_id) { digits_ = digits; ignore_merges_ = ignore_merges; use_bos_ = use_bos; bos_ = bos_id; }
 
     // parse_special: literal "<|eot_id|>"-style strings in `text` become their special token ids.
     std::vector<int32_t> encode(std::string_view text, bool add_bos, bool parse_special) const;
@@ -41,7 +43,11 @@ private:
     std::vector<int32_t> merge_result_;                      // rank -> merged token id
     int32_t byte_id_[256];
     std::vector<std::pair<uint32_t, uint32_t>> letters_, numbers_, spaces_;
+    std::unordered_map<uint64_t, uint32_t> compose_;   // (base << 32 | combining) -> composed code point (NFC normaliser of Qwen tokenizers)
+    std::string nfc(std::string_view text) const;
     int32_t bos_ = 128000;
+    uint32_t digits_ = 3;
+    bool ignore_merges_ = true, use_bos_ = true;
 };
 
 } // namespace ternix

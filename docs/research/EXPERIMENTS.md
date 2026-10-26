@@ -271,3 +271,38 @@ baseline commit.
 0.64 tok/s decode; CPU bf16 with 16 threads: 1.5 and 0.053 tok/s. The path quantises the bf16 master weights on every forward pass (`quantization_mode: online`), which is what the model
 card means by "do not expect efficiency gains"; it is a correctness reference, not a performance baseline. The TernixEngine decode on the same GPU is 400x faster, a figure that
 says more about the reference than about the engine. No llama.cpp, bitnet.cpp or T-MAC measurement exists yet (see `bench/COMPETITORS.md`).
+
+---
+
+## EXP-009  Second ternary architecture: Qwen3-style group-scaled weights with block-quantised activations (C8)
+
+Status: registered 2026-10-26, before running. Model: Ternary-Bonsai-1.7B (unpacked fp16 checkpoint, hash-verified), converted to `.ternix` arch 2.
+
+Question: does the engine's integer path (ternary x group-scale weights, int8 activations quantised per 128-column block) reproduce a model that was
+trained and released as weight-only ternary with fp16 activations, and what does the A8 activation step cost in perplexity?
+
+Hypothesis H1 (correctness): last-token logits of the engine versus transformers float32 weight-only inference have top-1 agreement on all prompts and
+KL < 1e-2 (same order as the BitNet engine-vs-reference differences, EXP-001).
+Hypothesis H2 (cost of A8): WikiText-2 perplexity of the engine is within +2% (relative) of fp16 weight-only transformers on identical windows. Falsified if the
+increase exceeds 5%, which would indicate that per-128-block int8 activations are unsuitable for a model not trained for A8 (or a defect).
+Metric: KL(ref || engine), top-1 agreement, cosine of logits; perplexity over the first 4096 text tokens of data/wikitext2_test.txt, windows of 512 tokens, stride 511,
+no BOS (the tokenizer config adds none); both sides score identical windows.
+Baseline: transformers 5.x, fp32 (logits) / fp16 GPU (perplexity), weight-only. Varied factor: activation precision only (the engine rounds activations to int8).
+Stopping rule: one pass; four prompts for H1, one perplexity run for H2. Not tested here: the GPU backend (arch 2 is CPU-only) and long-context YaRN behaviour.
+Command: `python scripts/verify_qwen3.py --hf models/Ternary-Bonsai-1.7B-unpacked --ternix models/bonsai-1p7b.ternix`; raw output `docs/research/data/verify_qwen3.json`.
+
+## EXP-009 outcome: Qwen3-style group-scaled architecture
+
+Run 2026-10-26 on the CPU engine (`docs/research/data/verify_qwen3.json`). Both hypotheses hold.
+
+* H1 (logits vs transformers fp32, weight-only, four prompts of 5, 17, 13 and 77 tokens): top-1 equal on 4/4; KL 4.2e-7 .. 1.8e-4; max |dlogit| 0.10 .. 0.18; cosine >= 0.99994.
+  These are the same magnitudes as the BitNet engine-vs-reference differences and the EXP-001 noise floor.
+* H2 (WikiText-2, first 4095 scored tokens, 512-token windows, no BOS): transformers fp16 24.356, engine W1.58A8 (per-128-block int8 activations) 24.345, relative difference -0.04%.
+  Activation quantisation at 128-column granularity costs nothing measurable on this model even though it was released as weight-only; the sample is small (4k tokens), so
+  differences below ~1% would not be resolved. The absolute value (24) reflects the short window and raw WikiText-2 text, not engine quality.
+* Format notes that mattered: the "unpacked" checkpoint is not exactly ternary (a few groups deviate <= 0.8% from {-s,0,s} through fp16 rounding), so the converter takes
+  the mean magnitude of nonzero entries as the scale and rejects a group only above 2%; the tokenizer needs NFC composition (pair table in the blob) to match `tokenizers`
+  on combining sequences (tests/test_tokenizer_parity.py, 8 cases pass for both models).
+* Speed (CPU, int8 head, pp128 / tg64, 5 reps; the machine was shared with another user job at 30-50% CPU so spreads are wide): row-by-row kernel prefill 92 / decode 19 tok/s;
+  register-tiled kernel (MR x NR) prefill 125 / decode 20-21 tok/s. For comparison the BitNet kernel reaches 260-450 prefill. The group-scaled kernel pays an int->float
+  conversion and fused multiply-add per 128-column block and per row; a fully integer scheme with one scale per row was not possible because scales differ per group.

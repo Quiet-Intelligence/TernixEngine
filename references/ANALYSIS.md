@@ -95,7 +95,7 @@ CUDA graphs (launch overhead of ~400 kernel launches per token) are an engineeri
 * Quality: WikiText-2 perplexity at fixed windows, KL(ref || engine) and top-1 flips against the float32 reference on a fixed
   prompt set with the EXP-001 noise floor next to them (A5), lm-evaluation-harness zero-shot tasks (ARC-e/c, HellaSwag,
   WinoGrande, PIQA) as in F2/M1, and a long-context probe (A6) when a long-context model is available.
-* Energy: not measured unless a wall-power meter is available (RAPL is not reachable on this Windows host); NVML board power
-  for the GPU is recorded and labelled as such.
+* Energy: wall power if a meter is available; otherwise RAPL package power (on Windows through the `Energy Meter` performance counters, `typeperf`) and NVML
+  board power, both above a measured idle, labelled as package/board only (DRAM counter reads 0 on the test host).
 * Pitfalls the suite guards against: shape fallbacks (assert the kernel actually used), baseline drift (pin and log), thermal
   throttling (log temperatures, randomise engine order), and formats that are not equal in bits per weight.
