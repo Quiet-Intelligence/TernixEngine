@@ -23,11 +23,13 @@ struct Linear {
     const uint8_t* w = nullptr;
     size_t N = 0, K = 0;
     float scale = 1.f;
+    const uint16_t* gs = nullptr;   // fp16 group scales [N][K/128] (group-scaled architectures), else nullptr
 };
 
 struct LayerWeights {
     Linear q, k, v, o, gate, up, down;
     const float *in_norm = nullptr, *post_norm = nullptr, *attn_sub = nullptr, *ffn_sub = nullptr;
+    const float *q_norm = nullptr, *k_norm = nullptr;   // per-head RMSNorm weights (QK-norm architectures)
 };
 
 struct Profile {
@@ -105,6 +107,7 @@ private:
     AlignedBuf<int8_t> q8_;
     AlignedBuf<float> deq_;
     AlignedBuf<int32_t> sumq_;
+    bool embed_f16_ = false;
     std::vector<AlignedBuf<float>> scores_;     // per thread
     AlignedBuf<float> attn_out_;
     AlignedBuf<float> att_part_;                 // decode attention partials [heads][chunks][head_dim + 2]

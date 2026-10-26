@@ -698,6 +698,7 @@ struct CudaModel::Impl {
     }
 
     explicit Impl(const ModelFile& f, int ctx_len) : file(f), cfg(f.config()), max_ctx(std::min<int>(ctx_len, static_cast<int>(f.config().max_pos))) {
+        if (cfg.arch != 1) throw std::runtime_error("cuda engine: only the BitNet architecture is implemented (architecture 2 runs on the CPU engine)");
         if (cfg.head_dim > 256 || cfg.head_dim % 32 != 0) throw std::runtime_error("cuda engine: unsupported head_dim");
         CK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
         CK(cudaMallocHost(reinterpret_cast<void**>(&h_tokens), CudaModel::kMaxChunk * 4));

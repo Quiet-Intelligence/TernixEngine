@@ -127,7 +127,12 @@ struct Streamer {
     }
 };
 
-std::string chat_prompt(const std::string& user) { return "User: " + user + "<|eot_id|>Assistant: "; }
+// BitNet 2B4T: "User: ...<|eot_id|>Assistant: "; Qwen3-style (arch 2): ChatML
+bool g_chatml = false;
+std::string chat_prompt(const std::string& user) {
+    if (g_chatml) return "<|im_start|>user\n" + user + "<|im_end|>\n<|im_start|>assistant\n";
+    return "User: " + user + "<|eot_id|>Assistant: ";
+}
 
 std::string backend_desc(Model& m) { return std::string("cpu isa=") + isa_name(m.isa()) + " threads=" + std::to_string(m.pool().size()); }
 #ifdef TERNIX_HAS_CUDA
@@ -398,8 +403,11 @@ int run(M& model, const Tokenizer& tok, const Args& a) {
         auto t0 = clk::now();
         // non-overlapping windows: [BOS] + up to W-1 text tokens, context reset per window, every text token scored once
         for (size_t s = 0; s < ids.size(); s += W - 1) {
-            std::vector<int32_t> win{static_cast<int32_t>(cfg.bos)};
-            win.insert(win.end(), ids.begin() + static_cast<long>(s), ids.begin() + static_cast<long>(std::min(ids.size(), s + W - 1)));
+            // models without BOS (Qwen): windows of W text tokens overlapping by one, so the first token of a window was the last target of the previous one
+            std::vector<int32_t> win;
+            if (cfg.add_bos) win.push_back(static_cast<int32_t>(cfg.bos));
+            const size_t take = cfg.add_bos ? W - 1 : W;
+            win.insert(win.end(), ids.begin() + static_cast<long>(s), ids.begin() + static_cast<long>(std::min(ids.size(), s + take)));
             if (win.size() < 2) break;
             const int n = static_cast<int>(win.size()) - 1;
             std::vector<float> per(static_cast<size_t>(n));
@@ -423,6 +431,11 @@ int main(int argc, char** argv) {
         Args a = parse(argc, argv);
         ModelFile file(a.model);
         Tokenizer tok(file.tokenizer_data(), file.tokenizer_size());
+        {
+            const ModelConfig& c = file.config();
+            tok.configure(c.digits, c.ignore_merges, c.add_bos, static_cast<int32_t>(c.bos));
+        }
+        g_chatml = file.config().arch == 2;
         if (a.cmd == "tokenize") {
             for (int32_t id : tok.encode(a.prompt, true, a.special)) std::printf("%d ", id);
             std::printf("\n");

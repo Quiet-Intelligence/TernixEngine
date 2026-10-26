@@ -201,3 +201,68 @@ TEST(I2K, SparseKMajorMatchesDenseExactly) {
                 }
             }
 }
+
+TEST(I2K, GroupScaledGemmMatchesDoubleReference) {
+    std::mt19937 rng(77);
+    std::normal_distribution<float> nd(0.f, 1.5f);
+    for (size_t K : {128u, 384u, 2048u})
+        for (size_t N : {1u, 3u, 8u})
+            for (size_t MR = 1; MR <= 4; ++MR) {
+                const size_t nb = K / 128;
+                auto w = random_ternary(N * K, static_cast<uint32_t>(rng()));
+                std::vector<uint8_t> wp(N * K / 4);
+                i2k::pack(w.data(), wp.data(), N, K);
+                std::vector<float> scale_f(N * nb);
+                std::vector<uint16_t> gs(N * nb);
+                for (size_t i = 0; i < gs.size(); ++i) {
+                    const float s = 0.01f + 0.001f * static_cast<float>(rng() % 50);
+                    gs[i] = static_cast<uint16_t>(_mm_extract_epi16(_mm_cvtps_ph(_mm_set_ss(s), _MM_FROUND_TO_NEAREST_INT), 0));
+                    scale_f[i] = _mm_cvtss_f32(_mm_cvtph_ps(_mm_cvtsi32_si128(gs[i])));
+                }
+                std::vector<float> x(MR * K);
+                for (auto& v : x) v = nd(rng);
+                std::vector<int8_t> q(MR * K);
+                std::vector<float> deq(MR * nb);
+                std::vector<int32_t> sq(MR * nb);
+                for (size_t m = 0; m < MR; ++m) i2k::quantize_act_blocks(x.data() + m * K, q.data() + m * K, K, deq.data() + m * nb, sq.data() + m * nb, Isa::Scalar);
+                std::vector<double> ref(MR * N, 0.0);
+                for (size_t m = 0; m < MR; ++m)
+                    for (size_t n = 0; n < N; ++n)
+                        for (size_t b = 0; b < nb; ++b) {
+                            int64_t d = 0;
+                            for (size_t k = b * 128; k < (b + 1) * 128; ++k) d += static_cast<int64_t>(q[m * K + k]) * w[n * K + k];
+                            ref[m * N + n] += static_cast<double>(scale_f[n * nb + b]) * deq[m * nb + b] * static_cast<double>(d);
+                        }
+                for (Isa isa : available_isas()) {
+                    std::vector<float> y(MR * N, -1.f);
+                    i2k::gemm_rows_gs(wp.data(), gs.data(), q.data(), deq.data(), sq.data(), MR, y.data(), N, 0, N, K, isa);
+                    for (size_t i = 0; i < y.size(); ++i)
+                        ASSERT_NEAR(y[i], ref[i], 2e-4 * (1.0 + std::fabs(ref[i]))) << isa_name(isa) << " K=" << K << " N=" << N << " MR=" << MR << " i=" << i;
+                }
+            }
+}
+
+TEST(I2K, BlockQuantizeMatchesPerBlockTokenQuantize) {
+    std::mt19937 rng(5);
+    std::normal_distribution<float> nd(0.f, 2.f);
+    const size_t K = 512;
+    std::vector<float> x(K);
+    for (auto& v : x) v = nd(rng);
+    x[200] = 40.f;                                   // an outlier only affects its own block
+    std::vector<int8_t> q(K);
+    std::vector<float> deq(K / 128);
+    std::vector<int32_t> sum(K / 128);
+    for (Isa isa : available_isas()) {
+        i2k::quantize_act_blocks(x.data(), q.data(), K, deq.data(), sum.data(), isa);
+        for (size_t b = 0; b < K / 128; ++b) {
+            std::vector<int8_t> qb(128);
+            float d;
+            int32_t s;
+            i2k::quantize_act(x.data() + b * 128, qb.data(), 128, &d, &s, Isa::Scalar);
+            EXPECT_EQ(deq[b], d);
+            EXPECT_EQ(sum[b], s);
+            for (size_t i = 0; i < 128; ++i) ASSERT_EQ(q[b * 128 + i], qb[i]);
+        }
+        EXPECT_GT(deq[1], 5 * deq[0]);               // block 1 holds the outlier
+    }
+}

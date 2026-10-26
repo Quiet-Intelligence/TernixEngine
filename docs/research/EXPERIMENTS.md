@@ -271,3 +271,22 @@ baseline commit.
 0.64 tok/s decode; CPU bf16 with 16 threads: 1.5 and 0.053 tok/s. The path quantises the bf16 master weights on every forward pass (`quantization_mode: online`), which is what the model
 card means by "do not expect efficiency gains"; it is a correctness reference, not a performance baseline. The TernixEngine decode on the same GPU is 400x faster, a figure that
 says more about the reference than about the engine. No llama.cpp, bitnet.cpp or T-MAC measurement exists yet (see `bench/COMPETITORS.md`).
+
+---
+
+## EXP-009  Second ternary architecture: Qwen3-style group-scaled weights with block-quantised activations (C8)
+
+Status: registered 2026-10-26, before running. Model: Ternary-Bonsai-1.7B (unpacked fp16 checkpoint, hash-verified), converted to `.ternix` arch 2.
+
+Question: does the engine's integer path (ternary x group-scale weights, int8 activations quantised per 128-column block) reproduce a model that was
+trained and released as weight-only ternary with fp16 activations, and what does the A8 activation step cost in perplexity?
+
+Hypothesis H1 (correctness): last-token logits of the engine versus transformers float32 weight-only inference have top-1 agreement on all prompts and
+KL < 1e-2 (same order as the BitNet engine-vs-reference differences, EXP-001).
+Hypothesis H2 (cost of A8): WikiText-2 perplexity of the engine is within +2% (relative) of fp16 weight-only transformers on identical windows. Falsified if the
+increase exceeds 5%, which would indicate that per-128-block int8 activations are unsuitable for a model not trained for A8 (or a defect).
+Metric: KL(ref || engine), top-1 agreement, cosine of logits; perplexity over the first 4096 text tokens of data/wikitext2_test.txt, windows of 512 tokens, stride 511,
+no BOS (the tokenizer config adds none); both sides score identical windows.
+Baseline: transformers 5.x, fp32 (logits) / fp16 GPU (perplexity), weight-only. Varied factor: activation precision only (the engine rounds activations to int8).
+Stopping rule: one pass; four prompts for H1, one perplexity run for H2. Not tested here: the GPU backend (arch 2 is CPU-only) and long-context YaRN behaviour.
+Command: `python scripts/verify_qwen3.py --hf models/Ternary-Bonsai-1.7B-unpacked --ternix models/bonsai-1p7b.ternix`; raw output `docs/research/data/verify_qwen3.json`.
