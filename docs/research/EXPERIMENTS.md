@@ -46,3 +46,79 @@ cache and float summation order is not excluded). Consequence for the project: l
 reference is not a meaningful gate for W1.58A8 models. Correctness gates are (a) exact integer-kernel tests, (b) top-1 agreement
 and KL below the measured noise band, (c) perplexity within the run-to-run noise on a fixed text. Not run: a separate fp32-KV
 engine variant to isolate the KV contribution (candidate for a later entry).
+
+---
+
+## EXP-002  Exact activation sparsity of the FFN down-projection input
+
+Status: run 2026-10-26 (logged here retroactively as an exploratory measurement; the confirmatory test is EXP-004).
+
+Question: how many entries of the int8 activation vector entering each BitLinear are exactly zero for BitNet 2B4T on natural text?
+Method: float32 reference (`scripts/reference_bitnet.py`, `collect=`), 4 windows x 512 WikiText-2 tokens, statistics of the
+per-token absmax-quantised activations at every projection input. Script `scripts/exp002_activation_sparsity.py`, data
+`docs/research/data/exp002_activation_sparsity.json`.
+
+Result: down-projection input 80.4% exactly zero, 88.0% in {-1,0,1} (per layer 69%..91%); o_proj input 4.8% zero; q/k/v/gate/up
+input 1.5% zero. No 128-wide block of the down input is entirely zero at batch 1 (so block-skipping in the current row-major
+layout would gain nothing; element-wise skipping needs a column-major layout).
+Caveat: one model, one text; per-token (batch 1) statistics only.
+
+## EXP-003  Quantised output head with exact rescoring (contribution C1)
+
+Status: registered 2026-10-26, before implementation.
+
+Hypotheses: H3a: an int8 per-row-scaled copy of the tied head, used to select the top C = 64 candidates that are then rescored
+with the bf16 rows, returns the same argmax as the full bf16 head on >= 99.9% of positions. H3b: with int4 (group 32) the same
+holds for C = 256. H3c: decode throughput rises by >= 1.3x (CPU) because the head read shrinks from 656 MB to 328 MB (int8) or
+164 MB (int4) plus C x 5 KB of rescoring. Falsified if agreement < 99%, or speedup < 1.15x.
+Metrics: argmax agreement and top-5 set agreement on 20,000 WikiText-2 positions; KL(p_full || p_candidate-set renormalised) for
+sampling use; perplexity of the candidate-restricted distribution vs the full softmax; decode tok/s (median of 7).
+Baseline: bf16 head. Varied factor: head precision {bf16, int8, int4-g32} x C {16, 64, 256}.
+Stopping rule: fixed grid. Not claimed: sampling-exactness (the candidate set truncates the tail; its mass is measured).
+
+## EXP-004  Exact zero-skipping in the down projection (C2)
+
+Status: registered 2026-10-26, before implementation.
+
+Hypothesis: a column-major (K-major) copy of the down-projection weights used with the nonzero activation indices produces
+bit-identical int32 outputs and reads only the columns of nonzero activations, so the down projection takes <= 0.45x the dense
+time at the measured 80% sparsity at batch 1 on CPU and GPU; break-even sparsity is reported. Falsified if outputs differ at all
+or time ratio > 0.7.
+Metrics: exact equality of outputs; kernel time (median of 15, rotating weights beyond LLC); end-to-end decode tok/s; speedup as a
+function of sparsity on synthetic activation vectors (0..95%).
+
+## EXP-005  Core selection and scheduling for decode on a hybrid CPU (C5)
+
+Status: registered 2026-10-26.
+
+Hypothesis: with dynamic chunk scheduling, P-core-only pinning (16 threads) gives the highest decode tok/s; using all 24 logical
+processors lowers it (measured read bandwidth 26 -> 17 GB/s); a static equal partition over 24 threads is the slowest and has
+the highest run-to-run spread. Falsified if all-24 dynamic beats 16 P-core dynamic by > 3%.
+Varied factor: {threads 4, 8, 12, 16, 20, 24} x {pinned P-core order, unpinned} x {dynamic chunks, static partition}.
+Metrics: decode tok/s median/min/max over 7 runs of 64 tokens, ctx 128.
+
+## EXP-006  int8 KV cache (C6)
+
+Status: registered 2026-10-26.
+
+Hypothesis: int8 K and V with a per-(token, kv-head) scale change WikiText-2 perplexity by less than the fp16-vs-fp32 difference
+measured in the same run set (noise band) at windows of 512 and 2048 tokens, and raise decode tok/s at 2048-token context by
+>= 8%. Falsified if the perplexity change exceeds 1% or the speedup is below 3%.
+
+## EXP-007  Zero-bitmap + sign layout on AVX-VNNI and CUDA (C3)
+
+Status: registered 2026-10-26.
+
+Hypothesis: at the measured mean zero density 0.42 the bitmap+sign layout moves 17% fewer bytes than 2-bit; on the 16-thread
+P-core pool decode GEMV is >= 1.05x faster than I2K128 despite the extra unpack instructions; on the GPU it is no slower. This
+hypothesis is genuinely uncertain: BITCOS reports an instruction-bound loss on one 8-core part. A negative result is an
+acceptable outcome and will be reported.
+Metrics: GEMV time on the four decode shapes with rotating weights; bytes per token; effective GB/s against the 26 GB/s ceiling.
+
+## EXP-008  Tensor-core W1.58A8 prefill (C4)
+
+Status: registered 2026-10-26.
+
+Hypothesis: decoding 2-bit codes to s8 fragments in registers and using `mma.sync.aligned.m16n8k32.s32.s8.s8.s32` gives >= 5x
+the dp4a kernel's prefill throughput for chunks of 64-512 tokens on the RTX 5060, bit-identical to the dp4a kernel.
+Metrics: prefill tok/s (pp128/pp512), exact output equality, achieved int8 TOPS.
