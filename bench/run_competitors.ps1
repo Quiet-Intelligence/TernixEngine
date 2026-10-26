@@ -3,6 +3,8 @@
 # Steps: verify the downloaded llama.cpp release hashes, extract, convert the model to GGUF (TQ2_0 / TQ1_0), run llama-bench on CPU and GPU,
 # store raw JSON under docs\research\data\competitors\. bitnet.cpp is optional (see bench\COMPETITORS.md section 2).
 $ErrorActionPreference = "Stop"
+# native commands do not honour $ErrorActionPreference: stop at the first non-zero exit code instead of benchmarking a missing file
+function Run { param([string]$exe, [string[]]$a) & $exe @a; if ($LASTEXITCODE -ne 0) { throw "failed (exit $LASTEXITCODE): $exe $($a -join ' ')" } }
 $root = "C:\PROFESSIONAL\Development\AI-HPC"
 $comp = "$root\ternix-competitors"
 $out  = "$root\TernixEngine\docs\research\data\competitors"
@@ -24,7 +26,7 @@ Expand-Archive "$comp\dl\cudart-llama-bin-win-cuda-12.4-x64.zip" "$comp\llama-b1
 
 # 2. convert the bf16 checkpoint with llama.cpp's own converter (run inside the project venv; installs only the converter's dependency)
 $py = "$root\TernixEngine\.venv\Scripts\python.exe"
-& uv pip install --python $py gguf sentencepiece | Out-Null
+Run "uv" @("pip", "install", "--python", $py, "gguf", "sentencepiece")
 & $py "$comp\llama.cpp\convert_hf_to_gguf.py" "$root\TernixEngine\models\bitnet-b1.58-2B-4T-bf16" --outfile "$comp\bitnet2b4t-f16.gguf" --outtype f16
 foreach ($t in "TQ2_0", "TQ1_0") {
   & "$comp\llama-b11889-cpu\llama-quantize.exe" "$comp\bitnet2b4t-f16.gguf" "$comp\bitnet2b4t-$($t.ToLower()).gguf" $t
@@ -33,8 +35,8 @@ foreach ($t in "TQ2_0", "TQ1_0") {
 # 3. benchmarks: 7 repetitions each, 16 threads (P cores), pp128 / tg64; the log shows which quant type each tensor really got
 foreach ($t in "tq2_0", "tq1_0") {
   $m = "$comp\bitnet2b4t-$t.gguf"
-  & "$comp\llama-b11889-cpu\llama-bench.exe" -m $m -t 16 -p 128 -n 64 -r 7 -o json   | Out-File -Encoding utf8 "$out\llamacpp_cpu_$t.json"
-  & "$comp\llama-b11889-cuda124\llama-bench.exe" -m $m -ngl 99 -p 128 -n 64 -r 7 -o json | Out-File -Encoding utf8 "$out\llamacpp_cuda_$t.json"
+  & "$comp\llama-b11889-cpu\llama-bench.exe" -m $m -t 16 -p 128 -n 64 -r 7 -o json | Out-File -Encoding utf8 "$out\llamacpp_cpu_$t.json"; if ($LASTEXITCODE -ne 0) { throw "llama-bench (cpu, $t) failed" }
+  & "$comp\llama-b11889-cuda124\llama-bench.exe" -m $m -ngl 99 -p 128 -n 64 -r 7 -o json | Out-File -Encoding utf8 "$out\llamacpp_cuda_$t.json"; if ($LASTEXITCODE -ne 0) { throw "llama-bench (cuda, $t) failed" }
   Get-Item $m | Select-Object Name, Length | Out-File -Append "$out\sizes.txt"
 }
 "b11889" | Out-File "$out\llamacpp_version.txt"
