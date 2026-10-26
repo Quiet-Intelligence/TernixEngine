@@ -1,0 +1,1 @@
+round -1 HF transformers GPU bf16: {'pp_tps': 78.45689988523485, 'tg_tps': 0.6[HF transformers Cround -1 HF transformers CPU bf16: {'pp_tps': 1.4987510714122763, 'tg_tps': 0.04689068242388921}

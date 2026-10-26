@@ -87,7 +87,7 @@ def one_run(e: dict, pp: int, tg: int) -> dict:
         return parse_llama_bench(run(e["cmd"] + ["-p", str(pp), "-n", str(tg), "-r", "1", "-o", "json"]), pp, tg)
     if e["kind"] == "hfpy":
         out = run(e["cmd"] + ["--pp", str(pp), "--tg", str(tg), "--reps", "1"])
-        d = json.loads(out.strip().splitlines()[-1])
+        d = json.loads([l for l in out.splitlines() if l.startswith("{")][-1])
         return {"pp_tps": d["pp_tps"], "tg_tps": d["tg_tps"]}
     raise ValueError(e["kind"])
 
