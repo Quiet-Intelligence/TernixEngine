@@ -27,6 +27,11 @@ Expand-Archive "$comp\dl\cudart-llama-bin-win-cuda-12.4-x64.zip" "$comp\llama-b1
 # 2. convert the bf16 checkpoint with llama.cpp's own converter (run inside the project venv; installs only the converter's dependency)
 $py = "$root\TernixEngine\.venv\Scripts\python.exe"
 Run "uv" @("pip", "install", "--python", $py, "gguf", "sentencepiece")
+# llama.cpp's BitNet converter loads the vocabulary with _set_vocab_sentencepiece(), which needs a tokenizer.model; the 2B4T checkpoint only has the Llama-3 BPE
+# tokenizer.json (the converter stops with FileNotFoundError). The vocabulary does not influence llama-bench timings, so switch to the BPE path and record the diff.
+$bn = "$comp\llama.cpp\conversionitnet.py"
+(Get-Content $bn -Raw) -replace 'self\._set_vocab_sentencepiece\(\)', 'self._set_vocab_gpt2()' | Set-Content $bn -NoNewline
+& git -C "$comp\llama.cpp" diff | Out-File -Encoding utf8 "$out\converter_patch.diff"
 Run $py @("$comp\llama.cpp\convert_hf_to_gguf.py", "$root\TernixEngine\models\bitnet-b1.58-2B-4T-bf16", "--outfile", "$comp\bitnet2b4t-f16.gguf", "--outtype", "f16")
 foreach ($t in "TQ2_0", "TQ1_0") {
   Run "$comp\llama-b11889-cpu\llama-quantize.exe" @("$comp\bitnet2b4t-f16.gguf", "$comp\bitnet2b4t-$($t.ToLower()).gguf", $t)
