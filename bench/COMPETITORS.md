@@ -55,3 +55,8 @@ ternary inference on the GPU. `bench/run_competitors.ps1` therefore also quantis
 ternary weights) and keep the TQ2_0 CUDA log (`llamacpp_cuda_tq2_0.log`) as evidence of what happened. For a ternary-aware GPU competitor use the bitnet.cpp GPU kernel
 (`BitNet/gpu`, W2A8, GEMV only, built with nvcc); see `references/CODE.md`.
 
+## T-MAC feasibility (README reading, 2026-10-26)
+
+T-MAC's documented BitNet model is `bitnet_b1_58-3B` (not 2B4T), it needs TVM built from source with Python 3.8, Clang 17 and Visual Studio on Windows, and its authors state that a
+speed-up is not guaranteed on x86. A same-model row is therefore not possible without porting one side; keep T-MAC as a literature comparison only. Details: `references/CODE.md`.
+
