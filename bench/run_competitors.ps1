@@ -33,15 +33,19 @@ $bn = "$comp/llama.cpp/conversion/bitnet.py"
 (Get-Content $bn -Raw) -replace 'self\._set_vocab_sentencepiece\(\)', 'self._set_vocab_gpt2()' | Set-Content $bn -NoNewline
 & git -C "$comp\llama.cpp" diff | Out-File -Encoding utf8 "$out\converter_patch.diff"
 Run $py @("$comp\llama.cpp\convert_hf_to_gguf.py", "$root\TernixEngine\models\bitnet-b1.58-2B-4T-bf16", "--outfile", "$comp\bitnet2b4t-f16.gguf", "--outtype", "f16")
-foreach ($t in "TQ2_0", "TQ1_0") {
+# TQ2_0 / TQ1_0 are the ternary types. The ggml CUDA backend at this commit has no TQ2_0/TQ1_0 kernels (no reference under ggml/src/ggml-cuda; only Vulkan has them), so
+# a CUDA run of those two is only a check of what llama.cpp does with them; the GPU comparators are Q2_K (2.6 bpw) and Q4_0 (4.5 bpw), which CUDA supports. They are
+# NOT lossless for ternary weights; they are the closest supported formats and are reported with their bits per weight.
+foreach ($t in "TQ2_0", "TQ1_0", "Q2_K", "Q4_0") {
   Run "$comp\llama-b11889-cpu\llama-quantize.exe" @("$comp\bitnet2b4t-f16.gguf", "$comp\bitnet2b4t-$($t.ToLower()).gguf", $t)
 }
 
 # 3. benchmarks: 7 repetitions each, 16 threads (P cores), pp128 / tg64; the log shows which quant type each tensor really got
-foreach ($t in "tq2_0", "tq1_0") {
+foreach ($t in "tq2_0", "tq1_0", "q2_k", "q4_0") {
   $m = "$comp\bitnet2b4t-$t.gguf"
   & "$comp\llama-b11889-cpu\llama-bench.exe" -m $m -t 16 -p 128 -n 64 -r 7 -o json | Out-File -Encoding utf8 "$out\llamacpp_cpu_$t.json"; if ($LASTEXITCODE -ne 0) { throw "llama-bench (cpu, $t) failed" }
-  & "$comp\llama-b11889-cuda124\llama-bench.exe" -m $m -ngl 99 -p 128 -n 64 -r 7 -o json | Out-File -Encoding utf8 "$out\llamacpp_cuda_$t.json"; if ($LASTEXITCODE -ne 0) { throw "llama-bench (cuda, $t) failed" }
+  & "$comp\llama-b11889-cuda124\llama-bench.exe" -m $m -ngl 99 -p 128 -n 64 -r 7 -o json 2> "$out\llamacpp_cuda_$t.log" | Out-File -Encoding utf8 "$out\llamacpp_cuda_$t.json"
+  if ($LASTEXITCODE -ne 0 -and $t -notlike "tq*") { throw "llama-bench (cuda, $t) failed" }   # a TQ failure on CUDA is an expected, recorded result
   Get-Item $m | Select-Object Name, Length | Out-File -Append "$out\sizes.txt"
 }
 "b11889" | Out-File "$out\llamacpp_version.txt"

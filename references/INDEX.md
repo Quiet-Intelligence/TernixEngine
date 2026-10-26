@@ -8,6 +8,8 @@ newer works are not redistributed in this repository (fetch them from the links;
 snippets only, S = secondary source only (vendor page, news, blog). Numbers in the "Reported" column are the authors' own
 claims and are not independently reproduced here unless an entry says so.
 
+Source-level reading of two competitor implementations (bitnet.cpp I2_S and GPU kernels, llama.cpp TQ2_0 and its CUDA coverage) is in `CODE.md`.
+
 ## 1. Foundations (in this repository)
 
 | ID | Work | Date / venue | Core idea | V |
