@@ -47,3 +47,11 @@ python bench/ternixbench.py report docs/research/data/speed_all.json > docs/rese
 ```
 Pitfalls to check and log for every engine (see `references/ANALYSIS.md` section 4): kernel actually used, bits per weight of the file, threads and
 affinity, whether the head is quantised, llama.cpp version drift, thermal state. Report numbers next to the bytes-per-token column.
+
+## GPU comparator for llama.cpp (source finding, 2026-10-26)
+
+At the pinned commit (d854d98 / b11889) `ggml/src/ggml-cuda` contains no TQ2_0 or TQ1_0 code (Vulkan does), so `llama-bench -ngl 99` on a TQ2_0 file is not a measurement of
+ternary inference on the GPU. `bench/run_competitors.ps1` therefore also quantises Q2_K and Q4_0 for the CUDA runs; report them with their bits per weight (not lossless for
+ternary weights) and keep the TQ2_0 CUDA log (`llamacpp_cuda_tq2_0.log`) as evidence of what happened. For a ternary-aware GPU competitor use the bitnet.cpp GPU kernel
+(`BitNet/gpu`, W2A8, GEMV only, built with nvcc); see `references/CODE.md`.
+
