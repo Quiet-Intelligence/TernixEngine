@@ -33,3 +33,5 @@ models/
 *.ternix
 *.safetensors
 *.gguf
+build-*/
+data/

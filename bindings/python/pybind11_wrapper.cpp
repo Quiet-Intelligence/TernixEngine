@@ -4,7 +4,6 @@
 #include <stdexcept>
 #include <string>
 #include "ternix/bitpack.hpp"
-#include "ternix/model.hpp"
 #include "ternix/mul_mat_ternary.h"
 #ifdef TERNIX_HAS_CUDA
 #include "ternix/cuda_kernels.cuh"
@@ -88,11 +87,4 @@ PYBIND11_MODULE(ternix_engine, m) {
 #else
     m.attr("has_cuda") = false;
 #endif
-
-    py::class_<ternix::Model>(m, "Model")
-        .def(py::init<const std::string&>())
-        .def("load", &ternix::Model::load)
-        .def_readwrite("vocab_size", &ternix::Model::vocab_size)
-        .def_readwrite("hidden_size", &ternix::Model::hidden_size)
-        .def_readwrite("num_layers", &ternix::Model::num_layers);
 }
