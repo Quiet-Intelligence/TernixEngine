@@ -53,5 +53,5 @@ measured (permission), so no ranking against llama.cpp, bitnet.cpp or T-MAC is c
 Numbers from different sessions are not comparable (the read ceiling moved between 26 and 38 GB/s); all comparisons used here are interleaved within a session.
 
 ## 5. Future work
-Group-scaled and weight-only ternary models (Ternary Bonsai class), AVX-512 VNNI and NEON kernels, a certified top-k head for sampling, speculative decoding with a
-ternary draft, KV compression for long-context models, the competitor comparison, and energy measurement with a wall-power meter.
+A GPU backend for the group-scaled architecture, further 2026 ternary families, AVX-512 VNNI and NEON kernels, a certified top-k head for sampling, speculative decoding with a
+ternary draft, KV compression for long-context models, the competitor comparison, and energy measurement with a wall-power meter (package/board power only is measured here).

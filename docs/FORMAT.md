@@ -16,9 +16,13 @@ offset 16   u32[40]  config slots           see below
 (64-byte aligned) tokenizer section (offset/size in config slots 16/17)
 ```
 
-u32 config slots: 0 arch (1 = BitNet block), 1 vocab, 2 hidden, 3 layers, 4 heads, 5 kv_heads, 6 head_dim, 7 ffn, 8 max_pos,
+u32 config slots: 0 arch (1 = BitNet block, 2 = Qwen3-style group-scaled block), 1 vocab, 2 hidden, 3 layers, 4 heads, 5 kv_heads, 6 head_dim, 7 ffn, 8 max_pos,
 9 tie_embeddings, 10 activation (0 SiLU-GLU, 1 ReLU^2-GLU), 11 sub-norms, 12 bos, 13 eos, 14 eot, 15 n_tensors,
-16 tokenizer offset, 17 tokenizer bytes.
+16 tokenizer offset, 17 tokenizer bytes. Architecture 2 adds slots 18 QK-norm, 19 group size (128), 20 activation block (128; 0 = per token),
+21 head dtype (0 bf16, 1 f16), 22 add-BOS, 23 digit-group length, 24 ignore-merges. They are read only when arch == 2; arch 1 files keep their defaults.
+Architecture 2 also stores `rope.inv_freq` (f32, head_dim/2, precomputed by the converter, YaRN included; the attention factor is float slot 2),
+`<weight>.gscale` (f16 `[N][K/128]` per-group scales that replace the per-tensor scale), `q_norm`/`k_norm` weights, and an NFC composition table
+in the tokenizer blob.
 
 dtypes: 0 f32, 1 bf16, 2 f16, 3 I2K128 (ternary weights).
 
@@ -33,6 +37,10 @@ Why this layout: one 32-byte load masked with `0x03` (and shifted by 2, 4, 6) gi
 activation partners are four *contiguous* 32-byte loads, so the dot product needs no byte shuffles on either operand. With
 codes in {0,1,2} the product is an unsigned x signed byte dot (`vpdpbusd` / `vpmaddubsw`), and
 `sum_k q_k w_k = sum_k q_k c_k - sum_k q_k` where the second term is one scalar per activation row.
+
+Group-scaled variant (arch 2): the same 2-bit codes, but the scale is per (row, 128-column block) and the activations are quantised per
+128-column block (`deq_step` and the activation sum are per block): `y = sum_b s[n][b] * deq[b] * (sum_{k in b} q_k c_k - sum_{k in b} q_k)`,
+accumulated in float lanes.
 
 `y = (sum_k q_k w_k) * deq_step * scale`, with `q = clamp(rint(x * 127/amax), -128, 127)` per token (`amax` floored at 1e-5)
 and `deq_step = amax/127`: this is exactly BitLinear's fake-quantised matmul evaluated in integer arithmetic.

@@ -134,13 +134,13 @@ Until those numbers exist, no claim of being faster than any other engine is mad
 a reference in the results above (it re-quantises the bf16 weights on every forward pass, as its model card warns; not an efficiency baseline).
 
 ## Limitations and roadmap
-1. One architecture (BitNet b1.58 block, per-tensor scale). 2026 ternary models (Ternary Bonsai, CAT-Q/Qwen3-class conversions) use group-128 scales,
-   SiLU-GLU, QK-norm and in several cases weight-only (A16) inference, which this int8-activation path does not reproduce faithfully.
+1. Two architectures: the BitNet b1.58 block (CPU + GPU) and a Qwen3-style group-scaled block (Ternary-Bonsai-1.7B; CPU only, 2x slower per
+   weight byte than the BitNet kernel: prefill ~125 tok/s, decode ~20 tok/s). Other 2026 families (CAT-Q conversions, Falcon-E, Sherry, TriLM) are not loaded.
 2. CPU kernels target AVX2/AVX-VNNI; AVX-512 VNNI and ARM NEON/SDOT are not implemented.
 3. The int4 head's guarantee is statistical (6.5 sigma, 0 misses in 12,024 positions); only int8 is proved. Sampling sees exact logits for the
    candidates and approximate logits elsewhere.
 4. Single-sequence decoding; no continuous batching, no paged KV, no speculative decoding.
-5. Energy is not measured (no wall-power meter; RAPL is not reachable on this host).
+5. Energy: CPU package power (Windows RAPL energy meter) and GPU board power are measured above idle (`bench/energy.py`); DRAM, fans and wall power are not (no meter; the DRAM counter reads 0).
 
 ## License
 Distributed under the **Elastic License 2.0** (`LICENSE`): use, modify and share with attribution; not as a hosted/managed service; no
