@@ -1,0 +1,6 @@
+A/B decode, 48 tokens after a 16-token prompt, 21 interleaved repetitions, 16 threads
+  bf16               median  25.01 tok/s  (min  24.25 max  25.89)  vs first: x1.000 (paired median x1.000, p10 x1.000, p90 x1.000)
+  int8               median  32.29 tok/s  (min  30.26 max  33.56)  vs first: x1.291 (paired median x1.295, p10 x1.240, p90 x1.319)
+  int8+sparse        median  33.70 tok/s  (min  32.11 max  34.46)  vs first: x1.348 (paired median x1.341, p10 x1.318, p90 x1.366)
+  int4+sparse        median  34.27 tok/s  (min  32.08 max  35.39)  vs first: x1.370 (paired median x1.381, p10 x1.314, p90 x1.397)
+  int4+sparse+kv8    median  34.02 tok/s  (min  32.70 max  36.12)  vs first: x1.361 (paired median x1.360, p10 x1.319, p90 x1.395)

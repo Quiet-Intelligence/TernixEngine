@@ -175,3 +175,29 @@ TEST(I2K, QuantizeZerosAndTinyInputs) {
         EXPECT_EQ(s, 0);
     }
 }
+
+TEST(I2K, SparseKMajorMatchesDenseExactly) {
+    std::mt19937 rng(21);
+    for (size_t K : {128u, 640u, 6912u})
+        for (size_t N : {128u, 256u, 640u, 2560u})
+            for (int zero_pct : {0, 50, 80, 95, 100}) {
+                auto w = random_ternary(N * K, static_cast<uint32_t>(rng()));
+                std::vector<int8_t> q(K);
+                for (auto& v : q) v = (static_cast<int>(rng() % 100) < zero_pct) ? 0 : static_cast<int8_t>(static_cast<int>(rng() % 256) - 128);
+                std::vector<uint8_t> wp(N * K / 4), wk(K * N / 4);
+                i2k::pack(w.data(), wp.data(), N, K);
+                i2k::pack_kmajor_from_i2k(wp.data(), wk.data(), N, K);
+                std::vector<int32_t> dense(N);
+                i2k::gemv(wp.data(), q.data(), sum_row(q.data(), K), dense.data(), 0, N, K, Isa::Scalar);
+                std::vector<uint32_t> idx(K);
+                int32_t sq = 0;
+                const size_t cnt = i2k::nonzero_indices(q.data(), K, idx.data(), &sq);
+                EXPECT_EQ(sq, sum_row(q.data(), K));
+                for (Isa isa : available_isas()) {
+                    std::vector<int32_t> acc(N, 0);
+                    i2k::gemv_sparse_accumulate(wk.data(), N, q.data(), idx.data(), cnt, acc.data(), isa);
+                    for (size_t n = 0; n < N; ++n) acc[n] -= sq;
+                    ASSERT_EQ(acc, dense) << isa_name(isa) << " K=" << K << " N=" << N << " zeros=" << zero_pct << "% nnz=" << cnt;
+                }
+            }
+}

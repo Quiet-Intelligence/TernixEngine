@@ -1,0 +1,8 @@
+ppl-ctx 512 kv:''
+tokens scored 8200 | mean NLL 3.06011 | perplexity 21.3299 | 191.2 s
+ppl-ctx 512 kv:'--kv-int8'
+tokens scored 8200 | mean NLL 3.06050 | perplexity 21.3383 | 194.6 s
+ppl-ctx 2048 kv:''
+tokens scored 8200 | mean NLL 2.72040 | perplexity 15.1864 | 216.3 s
+ppl-ctx 2048 kv:'--kv-int8'
+tokens scored 8200 | mean NLL 2.72300 | perplexity 15.2260 | 221.5 s

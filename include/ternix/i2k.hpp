@@ -9,7 +9,10 @@
 // unsigned x signed byte dot product (vpdpbusd / vpmaddubsw) and the correction term is one scalar per activation row.
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 #include "ternix/cpu_features.hpp"
+#include "ternix/threadpool.hpp"
+#include "ternix/util.hpp"
 
 namespace ternix {
 namespace i2k {
@@ -28,6 +31,28 @@ void gemv(const uint8_t* W, const int8_t* q, int32_t sum_q, int32_t* y, size_t n
 // Same for MR activation rows (1 <= MR <= 4, rows contiguous with stride K): y[m * y_stride + i].
 void gemm_rows(const uint8_t* W, const int8_t* q, const int32_t* sum_q, size_t MR, int32_t* y, size_t y_stride,
                size_t n0, size_t n1, size_t K, Isa isa);
+
+// --- exact activation-sparse GEMV (batch 1) -----------------------------------------------------------------------------
+// K-major copy of a ternary matrix: row k holds the N output codes for input column k, four per byte (output n in bit pair
+// n % 4 of byte n / 4), code = w + 1. Skipping an input column whose int8 activation is exactly 0 changes nothing, so
+//   y[n] = sum_{k: q_k != 0} q_k * W[n][k]
+// is bit-identical to the dense kernel while reading only the rows of nonzero activations (80% of the down-projection input of
+// BitNet 2B4T is exactly zero, see docs/research/EXPERIMENTS.md EXP-002).
+// Builds the K-major copy from the I2K128 matrix (N rows, K columns); out has K * N/4 bytes. N % 128 == 0.
+void pack_kmajor_from_i2k(const uint8_t* i2k_rows, uint8_t* out, size_t N, size_t K);
+// Collects the nonzero positions of q (length K) in ascending order; returns their count; sum_q receives their sum.
+size_t nonzero_indices(const int8_t* q, size_t K, uint32_t* idx, int32_t* sum_q);
+// Adds sum_k q_k * code[k][n] over the listed columns into acc (N int32, caller zero-initialises); the caller subtracts sum_q.
+void gemv_sparse_accumulate(const uint8_t* kmajor, size_t N, const int8_t* q, const uint32_t* idx, size_t count, int32_t* acc, Isa isa);
+
+// Parallel batch-1 driver: nonzero columns are split into chunks claimed dynamically; every thread accumulates into a private
+// int32 vector, then the vectors are summed and the sum_q correction subtracted: y[n] = exact dense GEMV result.
+struct SparseScratch {
+    std::vector<uint32_t> idx;
+    std::vector<AlignedBuf<int32_t>> acc;
+    size_t nnz = 0;   // nonzero count of the last call (for statistics)
+};
+void gemv_sparse(ThreadPool& pool, const uint8_t* kmajor, size_t N, size_t K, const int8_t* q, int32_t* y, SparseScratch& scratch, Isa isa);
 
 // Reference decode of one row (tests, tooling): out[k] in {-1, 0, +1}.
 void unpack_row(const uint8_t* row, int8_t* out, size_t K);

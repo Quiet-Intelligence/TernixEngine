@@ -1,0 +1,87 @@
+round -1 ternix GPU bf16 head: {'pp_tps': 3494.8, 'tg_tps': 212.13}
+round -1 ternix GPU int8 head: {'pp_tps': 3576.7, 'tg_tps': 255.62}
+round -1 ternix CPU int8 head: {'pp_tps': 506.5, 'tg_tps': 32.55}
+round -1 ternix CPU int4 head + sparse down: {'pp_tps': 310.9, 'tg_tps': 31.75}
+round -1 ternix-baseline CPU (d264a0d): {'pp_tps': 313.4, 'tg_tps': 23.5}
+round -1 ternix CPU int8 head + sparse down: {'pp_tps': 175.6, 'tg_tps': 31.22}
+round -1 ternix CPU bf16 head: {'pp_tps': 299.6, 'tg_tps': 23.88}
+round -1 ternix-baseline GPU (d264a0d): {'pp_tps': 1227.6, 'tg_tps': 138.65}
+round 0 ternix CPU int8 head + sparse down: {'pp_tps': 179.7, 'tg_tps': 31.51}
+round 0 ternix CPU int8 head: {'pp_tps': 451.6, 'tg_tps': 32.22}
+round 0 ternix GPU int8 head: {'pp_tps': 3561.7, 'tg_tps': 255.72}
+round 0 ternix CPU bf16 head: {'pp_tps': 157.5, 'tg_tps': 24.6}
+round 0 ternix GPU bf16 head: {'pp_tps': 3478.4, 'tg_tps': 211.53}
+round 0 ternix-baseline CPU (d264a0d): {'pp_tps': 245.5, 'tg_tps': 25.2}
+round 0 ternix CPU int4 head + sparse down: {'pp_tps': 275.3, 'tg_tps': 34.22}
+round 0 ternix-baseline GPU (d264a0d): {'pp_tps': 1229.3, 'tg_tps': 135.5}
+round 1 ternix GPU int8 head: {'pp_tps': 3564.8, 'tg_tps': 259.64}
+round 1 ternix CPU int4 head + sparse down: {'pp_tps': 217.2, 'tg_tps': 33.86}
+round 1 ternix CPU int8 head: {'pp_tps': 417.9, 'tg_tps': 33.48}
+round 1 ternix-baseline GPU (d264a0d): {'pp_tps': 1220.4, 'tg_tps': 148.22}
+round 1 ternix CPU bf16 head: {'pp_tps': 177.2, 'tg_tps': 24.57}
+round 1 ternix-baseline CPU (d264a0d): {'pp_tps': 235.0, 'tg_tps': 25.51}
+round 1 ternix CPU int8 head + sparse down: {'pp_tps': 175.8, 'tg_tps': 34.27}
+round 1 ternix GPU bf16 head: {'pp_tps': 3491.8, 'tg_tps': 212.31}
+round 2 ternix CPU int8 head + sparse down: {'pp_tps': 161.8, 'tg_tps': 31.63}
+round 2 ternix-baseline GPU (d264a0d): {'pp_tps': 1241.1, 'tg_tps': 137.3}
+round 2 ternix CPU int8 head: {'pp_tps': 447.0, 'tg_tps': 32.15}
+round 2 ternix CPU bf16 head: {'pp_tps': 224.1, 'tg_tps': 24.63}
+round 2 ternix GPU int8 head: {'pp_tps': 3570.1, 'tg_tps': 244.0}
+round 2 ternix CPU int4 head + sparse down: {'pp_tps': 240.1, 'tg_tps': 33.89}
+round 2 ternix GPU bf16 head: {'pp_tps': 3502.8, 'tg_tps': 212.49}
+round 2 ternix-baseline CPU (d264a0d): {'pp_tps': 206.9, 'tg_tps': 25.31}
+round 3 ternix CPU int4 head + sparse down: {'pp_tps': 253.0, 'tg_tps': 32.35}
+round 3 ternix CPU int8 head: {'pp_tps': 455.0, 'tg_tps': 31.48}
+round 3 ternix CPU int8 head + sparse down: {'pp_tps': 178.6, 'tg_tps': 31.99}
+round 3 ternix-baseline GPU (d264a0d): {'pp_tps': 1206.8, 'tg_tps': 131.51}
+round 3 ternix GPU int8 head: {'pp_tps': 3565.1, 'tg_tps': 258.51}
+round 3 ternix CPU bf16 head: {'pp_tps': 337.2, 'tg_tps': 24.36}
+round 3 ternix-baseline CPU (d264a0d): {'pp_tps': 202.4, 'tg_tps': 24.47}
+round 3 ternix GPU bf16 head: {'pp_tps': 3458.9, 'tg_tps': 211.62}
+round 4 ternix CPU bf16 head: {'pp_tps': 279.1, 'tg_tps': 24.31}
+round 4 ternix-baseline GPU (d264a0d): {'pp_tps': 1226.3, 'tg_tps': 129.48}
+round 4 ternix CPU int8 head + sparse down: {'pp_tps': 179.2, 'tg_tps': 32.75}
+round 4 ternix GPU int8 head: {'pp_tps': 3582.1, 'tg_tps': 257.4}
+round 4 ternix GPU bf16 head: {'pp_tps': 3341.8, 'tg_tps': 193.59}
+round 4 ternix-baseline CPU (d264a0d): {'pp_tps': 277.1, 'tg_tps': 24.9}
+round 4 ternix CPU int4 head + sparse down: {'pp_tps': 328.6, 'tg_tps': 32.57}
+round 4 ternix CPU int8 head: {'pp_tps': 451.3, 'tg_tps': 32.9}
+round 5 ternix-baseline GPU (d264a0d): {'pp_tps': 1240.7, 'tg_tps': 145.05}
+round 5 ternix CPU int8 head + sparse down: {'pp_tps': 179.4, 'tg_tps': 31.33}
+round 5 ternix-baseline CPU (d264a0d): {'pp_tps': 266.0, 'tg_tps': 24.1}
+round 5 ternix CPU int8 head: {'pp_tps': 444.0, 'tg_tps': 29.77}
+round 5 ternix GPU int8 head: {'pp_tps': 3581.3, 'tg_tps': 258.35}
+round 5 ternix GPU bf16 head: {'pp_tps': 3477.8, 'tg_tps': 206.64}
+round 5 ternix CPU int4 head + sparse down: {'pp_tps': 270.7, 'tg_tps': 33.22}
+round 5 ternix CPU bf16 head: {'pp_tps': 283.9, 'tg_tps': 24.4}
+round 6 ternix GPU int8 head: {'pp_tps': 3122.6, 'tg_tps': 247.73}
+round 6 ternix CPU int8 head: {'pp_tps': 443.3, 'tg_tps': 32.57}
+round 6 ternix-baseline GPU (d264a0d): {'pp_tps': 1139.8, 'tg_tps': 140.33}
+round 6 ternix GPU bf16 head: {'pp_tps': 3493.3, 'tg_tps': 211.11}
+round 6 ternix CPU int8 head + sparse down: {'pp_tps': 178.7, 'tg_tps': 32.03}
+round 6 ternix CPU bf16 head: {'pp_tps': 261.0, 'tg_tps': 23.94}
+round 6 ternix CPU int4 head + sparse down: {'pp_tps': 256.1, 'tg_tps': 32.63}
+round 6 ternix-baseline CPU (d264a0d): {'pp_tps': 280.9, 'tg_tps': 24.94}
+Traceback (most recent call last):
+  File "C:\PROFESSIONAL\Development\AI-HPC\TernixEngine\bench\ternixbench.py", line 169, in <module>
+    main()
+  File "C:\PROFESSIONAL\Development\AI-HPC\TernixEngine\bench\ternixbench.py", line 163, in main
+    cmd_speed(a)
+  File "C:\PROFESSIONAL\Development\AI-HPC\TernixEngine\bench\ternixbench.py", line 109, in cmd_speed
+    out = {"env": collect_env(args.membw), "pp": args.pp, "tg": args.tg, "rounds": args.rounds, "engines": []}
+                  ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\PROFESSIONAL\Development\AI-HPC\TernixEngine\bench\ternixbench.py", line 57, in collect_env
+    out = run([membw_exe])
+          ^^^^^^^^^^^^^^^^
+  File "C:\PROFESSIONAL\Development\AI-HPC\TernixEngine\bench\ternixbench.py", line 33, in run
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\pndnt\AppData\Roaming\uv\python\cpython-3.12.12-windows-x86_64-none\Lib\subprocess.py", line 548, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\pndnt\AppData\Roaming\uv\python\cpython-3.12.12-windows-x86_64-none\Lib\subprocess.py", line 1026, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "C:\Users\pndnt\AppData\Roaming\uv\python\cpython-3.12.12-windows-x86_64-none\Lib\subprocess.py", line 1538, in _execute_child
+    hp, ht, pid, tid = _winapi.CreateProcess(executable, args,
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [WinError 2] The system cannot find the file specified

@@ -1,0 +1,73 @@
+{
+ "args": {
+  "model": "models/bitnet-2b4t.ternix",
+  "gpu": true,
+  "head": "bf16",
+  "kv_int8": false,
+  "tasks": "arc_easy,arc_challenge,hellaswag,piqa,winogrande",
+  "limit": 500,
+  "out": "docs/research/data/lm_eval_ternix_gpu.json"
+ },
+ "results": {
+  "arc_easy": {
+   "name": "arc_easy",
+   "sample_len": 500,
+   "acc,none": 0.75,
+   "acc_stderr,none": 0.019384310743640384,
+   "acc_norm,none": 0.756,
+   "acc_norm_stderr,none": 0.019226734893614636
+  },
+  "arc_challenge": {
+   "name": "arc_challenge",
+   "sample_len": 500,
+   "acc,none": 0.46,
+   "acc_stderr,none": 0.022311333245289593,
+   "acc_norm,none": 0.464,
+   "acc_norm_stderr,none": 0.022324981738385333
+  },
+  "hellaswag": {
+   "name": "hellaswag",
+   "sample_len": 500,
+   "acc,none": 0.504,
+   "acc_stderr,none": 0.022382357781962105,
+   "acc_norm,none": 0.606,
+   "acc_norm_stderr,none": 0.02187429930168918
+  },
+  "piqa": {
+   "name": "piqa",
+   "sample_len": 500,
+   "acc,none": 0.77,
+   "acc_stderr,none": 0.018839050391123182,
+   "acc_norm,none": 0.768,
+   "acc_norm_stderr,none": 0.01889619359195203
+  },
+  "winogrande": {
+   "name": "winogrande",
+   "sample_len": 500,
+   "acc,none": 0.744,
+   "acc_stderr,none": 0.019536923574747664
+  }
+ },
+ "n_samples": {
+  "arc_easy": {
+   "original": 2376,
+   "effective": 500
+  },
+  "arc_challenge": {
+   "original": 1172,
+   "effective": 500
+  },
+  "hellaswag": {
+   "original": 10042,
+   "effective": 500
+  },
+  "piqa": {
+   "original": 1838,
+   "effective": 500
+  },
+  "winogrande": {
+   "original": 1267,
+   "effective": 500
+  }
+ }
+}

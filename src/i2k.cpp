@@ -1,8 +1,12 @@
 #include "ternix/i2k.hpp"
 #include <immintrin.h>
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace ternix {
 namespace i2k {
@@ -220,6 +224,140 @@ void gemm_rows(const uint8_t* W, const int8_t* q, const int32_t* sum_q, size_t M
 
 void gemv(const uint8_t* W, const int8_t* q, int32_t sum_q, int32_t* y, size_t n0, size_t n1, size_t K, Isa isa) {
     gemm_rows(W, q, &sum_q, 1, y, n1 - n0, n0, n1, K, isa);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// exact activation-sparse GEMV
+// ---------------------------------------------------------------------------------------------------------------
+void pack_kmajor_from_i2k(const uint8_t* i2k_rows, uint8_t* out, size_t N, size_t K) {
+    // row k: 32-byte blocks of 128 outputs; byte l, bit pair j of block b holds output 128 b + 32 j + l (same trick as I2K128)
+    std::memset(out, 0, K * N / 4);
+    std::vector<int8_t> row(K);
+    for (size_t n = 0; n < N; ++n) {
+        unpack_row(i2k_rows + n * (K / 4), row.data(), K);
+        const size_t byte = (n / 128) * 32 + (n % 32);
+        const unsigned sh = static_cast<unsigned>((n % 128) / 32) * 2;
+        for (size_t k = 0; k < K; ++k) out[k * (N / 4) + byte] |= static_cast<uint8_t>((row[k] + 1) << sh);
+    }
+}
+
+#ifdef _MSC_VER
+static inline unsigned ctz32(uint32_t v) { unsigned long r; _BitScanForward(&r, v); return static_cast<unsigned>(r); }
+#else
+static inline unsigned ctz32(uint32_t v) { return static_cast<unsigned>(__builtin_ctz(v)); }
+#endif
+
+size_t nonzero_indices(const int8_t* q, size_t K, uint32_t* idx, int32_t* sum_q) {
+    size_t cnt = 0;
+    int32_t sum = 0;
+    size_t k = 0;
+    for (; k + 32 <= K; k += 32) {
+        const __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(q + k));
+        uint32_t m = ~static_cast<uint32_t>(_mm256_movemask_epi8(_mm256_cmpeq_epi8(v, _mm256_setzero_si256())));
+        while (m) {
+            const unsigned b = ctz32(m);
+            idx[cnt++] = static_cast<uint32_t>(k + b);
+            sum += q[k + b];
+            m &= m - 1;
+        }
+    }
+    for (; k < K; ++k)
+        if (q[k]) { idx[cnt++] = static_cast<uint32_t>(k); sum += q[k]; }
+    *sum_q = sum;
+    return cnt;
+}
+
+static void sparse_accumulate_scalar(const uint8_t* kmajor, size_t N, const int8_t* q, const uint32_t* idx, size_t count, int32_t* acc) {
+    for (size_t i = 0; i < count; ++i) {
+        const uint8_t* row = kmajor + static_cast<size_t>(idx[i]) * (N / 4);
+        const int a = q[idx[i]];
+        for (size_t n = 0; n < N; ++n) acc[n] += a * ((row[(n / 128) * 32 + (n % 32)] >> (((n % 128) / 32) * 2)) & 3);
+    }
+}
+
+// Rows are handled two at a time: the 2-bit codes of both rows are decoded (shift + mask), interleaved byte-wise and multiplied
+// against the broadcast activation pair with vpmaddubsw (|pair sum| <= 508). int16 accumulation is safe for up to 64 pairs, so each
+// chunk of 64 rows keeps eight int16 vectors per 128 outputs in registers and widens to int32 once per chunk and block.
+static void sparse_accumulate_avx2(const uint8_t* kmajor, size_t N, const int8_t* q, const uint32_t* idx, size_t count, int32_t* acc) {
+    const __m256i m3 = _mm256_set1_epi8(3);
+    const size_t nb = N / 128, rb = N / 4;
+    alignas(32) __m256i avs[32];
+    const uint8_t* rows[64];
+    for (size_t c0 = 0; c0 < count; c0 += 64) {
+        const size_t c1 = std::min(count, c0 + 64), n = c1 - c0, npairs = (n + 1) / 2;
+        for (size_t i = 0; i < n; ++i) {
+            rows[i] = kmajor + static_cast<size_t>(idx[c0 + i]) * rb;
+            for (size_t off = 0; off < rb; off += 64) _mm_prefetch(reinterpret_cast<const char*>(rows[i] + off), _MM_HINT_T1);
+        }
+        if (n & 1) rows[n] = rows[n - 1];
+        for (size_t p = 0; p < npairs; ++p) {
+            const int a1 = q[idx[c0 + 2 * p]], a2 = (2 * p + 1 < n) ? q[idx[c0 + 2 * p + 1]] : 0;
+            avs[p] = _mm256_set1_epi16(static_cast<int16_t>(((a2 & 0xFF) << 8) | (a1 & 0xFF)));
+        }
+        for (size_t b = 0; b < nb; ++b) {
+            __m256i lo[4], hi[4];
+            for (int j = 0; j < 4; ++j) lo[j] = hi[j] = _mm256_setzero_si256();
+            for (size_t p = 0; p < npairs; ++p) {
+                const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(rows[2 * p] + 32 * b));
+                const __m256i v2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(rows[2 * p + 1] + 32 * b));
+                const __m256i av = avs[p];
+                __m256i x1 = _mm256_and_si256(v1, m3), x2 = _mm256_and_si256(v2, m3);
+                lo[0] = _mm256_add_epi16(lo[0], _mm256_maddubs_epi16(_mm256_unpacklo_epi8(x1, x2), av));
+                hi[0] = _mm256_add_epi16(hi[0], _mm256_maddubs_epi16(_mm256_unpackhi_epi8(x1, x2), av));
+                x1 = _mm256_and_si256(_mm256_srli_epi16(v1, 2), m3); x2 = _mm256_and_si256(_mm256_srli_epi16(v2, 2), m3);
+                lo[1] = _mm256_add_epi16(lo[1], _mm256_maddubs_epi16(_mm256_unpacklo_epi8(x1, x2), av));
+                hi[1] = _mm256_add_epi16(hi[1], _mm256_maddubs_epi16(_mm256_unpackhi_epi8(x1, x2), av));
+                x1 = _mm256_and_si256(_mm256_srli_epi16(v1, 4), m3); x2 = _mm256_and_si256(_mm256_srli_epi16(v2, 4), m3);
+                lo[2] = _mm256_add_epi16(lo[2], _mm256_maddubs_epi16(_mm256_unpacklo_epi8(x1, x2), av));
+                hi[2] = _mm256_add_epi16(hi[2], _mm256_maddubs_epi16(_mm256_unpackhi_epi8(x1, x2), av));
+                x1 = _mm256_and_si256(_mm256_srli_epi16(v1, 6), m3); x2 = _mm256_and_si256(_mm256_srli_epi16(v2, 6), m3);
+                lo[3] = _mm256_add_epi16(lo[3], _mm256_maddubs_epi16(_mm256_unpacklo_epi8(x1, x2), av));
+                hi[3] = _mm256_add_epi16(hi[3], _mm256_maddubs_epi16(_mm256_unpackhi_epi8(x1, x2), av));
+            }
+            for (int j = 0; j < 4; ++j) {
+                int32_t* o = acc + 128 * b + 32 * j;
+                auto add = [&](int off, __m128i h16) {
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(o + off), _mm256_add_epi32(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(o + off)), _mm256_cvtepi16_epi32(h16)));
+                };
+                add(0, _mm256_castsi256_si128(lo[j]));        // outputs 0..7
+                add(8, _mm256_castsi256_si128(hi[j]));        // outputs 8..15
+                add(16, _mm256_extracti128_si256(lo[j], 1));  // outputs 16..23
+                add(24, _mm256_extracti128_si256(hi[j], 1));  // outputs 24..31
+            }
+        }
+    }
+}
+
+void gemv_sparse_accumulate(const uint8_t* kmajor, size_t N, const int8_t* q, const uint32_t* idx, size_t count, int32_t* acc, Isa isa) {
+    if (isa == Isa::Scalar) sparse_accumulate_scalar(kmajor, N, q, idx, count, acc);
+    else sparse_accumulate_avx2(kmajor, N, q, idx, count, acc);
+}
+
+void gemv_sparse(ThreadPool& pool, const uint8_t* kmajor, size_t N, size_t K, const int8_t* q, int32_t* y, SparseScratch& sc, Isa isa) {
+    const size_t T = static_cast<size_t>(pool.size());
+    if (sc.idx.size() < K) sc.idx.resize(K);
+    if (sc.acc.size() < T) sc.acc.resize(T);
+    for (size_t t = 0; t < T; ++t) {
+        if (sc.acc[t].size() < N) sc.acc[t].reset(N);
+        std::memset(sc.acc[t].data(), 0, N * sizeof(int32_t));
+    }
+    int32_t sum = 0;
+    const size_t cnt = nonzero_indices(q, K, sc.idx.data(), &sum);
+    sc.nnz = cnt;
+    constexpr size_t kChunk = 48;
+    pool.parallel_for((cnt + kChunk - 1) / kChunk, [&](size_t c, int tid) {
+        const size_t i0 = c * kChunk;
+        gemv_sparse_accumulate(kmajor, N, q, sc.idx.data() + i0, std::min(kChunk, cnt - i0), sc.acc[static_cast<size_t>(tid)].data(), isa);
+    });
+    constexpr size_t kRed = 256;
+    pool.parallel_for((N + kRed - 1) / kRed, [&](size_t c, int) {
+        const size_t n0 = c * kRed, n1 = std::min(N, n0 + kRed);
+        for (size_t n = n0; n < n1; ++n) {
+            int32_t s = -sum;
+            for (size_t t = 0; t < T; ++t) s += sc.acc[t][n];
+            y[n] = s;
+        }
+    });
 }
 
 } // namespace i2k
