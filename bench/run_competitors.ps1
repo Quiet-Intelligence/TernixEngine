@@ -27,9 +27,9 @@ Expand-Archive "$comp\dl\cudart-llama-bin-win-cuda-12.4-x64.zip" "$comp\llama-b1
 # 2. convert the bf16 checkpoint with llama.cpp's own converter (run inside the project venv; installs only the converter's dependency)
 $py = "$root\TernixEngine\.venv\Scripts\python.exe"
 Run "uv" @("pip", "install", "--python", $py, "gguf", "sentencepiece")
-& $py "$comp\llama.cpp\convert_hf_to_gguf.py" "$root\TernixEngine\models\bitnet-b1.58-2B-4T-bf16" --outfile "$comp\bitnet2b4t-f16.gguf" --outtype f16
+Run $py @("$comp\llama.cpp\convert_hf_to_gguf.py", "$root\TernixEngine\models\bitnet-b1.58-2B-4T-bf16", "--outfile", "$comp\bitnet2b4t-f16.gguf", "--outtype", "f16")
 foreach ($t in "TQ2_0", "TQ1_0") {
-  & "$comp\llama-b11889-cpu\llama-quantize.exe" "$comp\bitnet2b4t-f16.gguf" "$comp\bitnet2b4t-$($t.ToLower()).gguf" $t
+  Run "$comp\llama-b11889-cpu\llama-quantize.exe" @("$comp\bitnet2b4t-f16.gguf", "$comp\bitnet2b4t-$($t.ToLower()).gguf", $t)
 }
 
 # 3. benchmarks: 7 repetitions each, 16 threads (P cores), pp128 / tg64; the log shows which quant type each tensor really got
