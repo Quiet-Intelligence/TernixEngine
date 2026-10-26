@@ -34,4 +34,4 @@ models/
 *.safetensors
 *.gguf
 build-*/
-data/
+/data/

@@ -74,7 +74,7 @@ class RefModel:
             })
 
     @torch.no_grad()
-    def logits(self, ids: list[int], all_positions: bool = True, noise: float = 0.0, seed: int = 0) -> np.ndarray:
+    def logits(self, ids: list[int], all_positions: bool = True, noise: float = 0.0, seed: int = 0, collect: dict | None = None) -> np.ndarray:
         cfg, dev = self.cfg, self.dev
         H, nh, nkv = cfg["hidden_size"], cfg["num_attention_heads"], cfg["num_key_value_heads"]
         hd = H // nh
@@ -89,9 +89,14 @@ class RefModel:
         cos, sin = ang.cos()[:, None, :], ang.sin()[:, None, :]
         mask = torch.triu(torch.full((T, T), float("-inf"), device=dev), diagonal=1)
 
-        def lin(x, wl):
+        def lin(x, wl, tag=None):
             w, sc = wl
-            return act_quant(x) @ (w.float() * sc).T
+            xq = act_quant(x)
+            if collect is not None and tag is not None:   # statistics of the int8 activation fed to this projection
+                q = (xq / xq.abs().amax(-1, keepdim=True).clamp(min=1e-5) * 127).round()
+                collect.setdefault(tag, []).append({"zero": float((q == 0).float().mean()), "abs_le1": float((q.abs() <= 1).float().mean()),
+                                                     "rows_zero128": float((q.view(q.shape[0], -1, 128).abs().amax(-1) == 0).float().mean())})
+            return xq @ (w.float() * sc).T
 
         for L in self.layers:
             h = rmsnorm(x, L["in_norm"], eps)
@@ -103,10 +108,10 @@ class RefModel:
             v = v.repeat_interleave(nh // nkv, dim=1)
             att = torch.einsum("thd,shd->hts", q, k) / hd ** 0.5 + mask
             o = torch.einsum("hts,shd->thd", att.softmax(-1), v).reshape(T, H)
-            x = x + lin(rmsnorm(o, L["attn_sub"], eps), L["o"])
+            x = x + lin(rmsnorm(o, L["attn_sub"], eps), L["o"], "o_in")
             h = rmsnorm(x, L["post_norm"], eps)
-            m = rmsnorm(torch.relu(lin(h, L["gate"])).pow(2) * lin(h, L["up"]), L["ffn_sub"], eps)
-            x = x + lin(m, L["down"])
+            m = rmsnorm(torch.relu(lin(h, L["gate"], "qkvgu_in")).pow(2) * lin(h, L["up"]), L["ffn_sub"], eps)
+            x = x + lin(m, L["down"], "down_in")
         x = rmsnorm(x, self.final_norm, eps)
         if not all_positions:
             x = x[-1:]
