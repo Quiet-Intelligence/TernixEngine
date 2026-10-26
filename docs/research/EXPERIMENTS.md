@@ -319,3 +319,36 @@ to the CPU scalar reference within float rounding). Run 2026-10-26, RTX 5060 Lap
 * Speed, pp128 / tg128, 7 reps, median (min..max): fp16 head prefill 4741 (4733..4752), decode 209.6 (207.6..210.3); int8 head prefill 4874 (4848..4898), decode 251.0 (248.9..251.4).
   The CPU engine on the same model reaches 125 / 20 tok/s (shared machine). The 621 MB fp16 head is 65% of the 952 MB weights, which is why the int8 head (-50% head bytes) gives +20% decode here.
 
+---
+
+## EXP-010  Energy per decoded token (C9)
+
+Status: protocol written 2026-10-26 AFTER the first measurement pass had been seen (the first attempt was discarded for background load; a pass is a full run of
+`bench/energy.py`); the hypotheses below are therefore exploratory, and the second pass is the only confirmation.
+
+Question: does moving fewer bytes per token (certified int8 / int4 head, sparse down projection) lower the energy per token, or does the faster decode simply draw proportionally more power?
+Hypothesis H1: joules per token above idle fall in proportion to bytes moved on the CPU (1177 -> 658 MB, -44%). H2: the GPU path costs at least 3x less energy per token than the CPU path.
+Metric: (mean package power - idle package power + mean GPU board power - idle GPU power) / decode tokens per second, over a steady window of ~35-40 s (256-token decode, repeated).
+Package power: Windows `Energy Meter(RAPL_Package0_PKG)` (1 s resolution). GPU: `nvidia-smi` board power (0.2 s). Not measured: DRAM (the counter reads 0), fans, display, wall power.
+Controls: idle baseline of 20 s before each pass; abort above 8% background CPU load; 15 s cool-down between engines; order fixed (not randomised).
+Stopping rule: two passes; no further run to rescue a result.
+
+Result (`docs/research/data/energy.json`, raw passes `energy_run1/2.json`, logs `energy_run*.log`; values are pass 1 / pass 2; idle 14.4 / 15.6 W package, 16.0 / 16.2 W GPU; background CPU 6.9 / 6.4 %):
+
+| engine | decode tok/s | package W | GPU W | J/token above idle |
+|---|---:|---:|---:|---:|
+| CPU, bf16 head | 30.5 / 32.6 | 64.7 / 92.8 | 15.7 / 16.3 | 1.64 / 2.37 |
+| CPU, certified int8 head | 40.2 / 44.1 | 77.9 / 95.4 | 15.4 / 15.8 | 1.56 / 1.80 |
+| CPU, int8 head + sparse down | 45.1 / 47.5 | 92.6 / 95.8 | 11.9 / 17.1 | 1.64 / 1.71 |
+| CPU, int4 head + sparse down | 55.5 / 57.0 | 98.5 / 98.7 | 12.0 / 17.3 | 1.44 / 1.48 |
+| GPU, bf16 head | 203.1 / 186.7 | 40.8 / 45.9 | 83.7 / 79.1 | 0.46 / 0.50 |
+| GPU, certified int8 head | 249.1 / 248.9 | 51.4 / 41.6 | 85.4 / 84.5 | 0.43 / 0.38 |
+| CPU, Ternary-Bonsai-1.7B (arch 2), int8 head | 50.6 / 48.3 | 95.1 / 79.4 | 16.9 / 12.6 | 1.61 / 1.25 |
+
+Reading: H1 is only weakly supported. Package power rises with decode speed (the cores stay busy and run at the same clocks while waiting on memory less often), so the 1.8x speed-up
+from 30.5-32.6 to 55.5-57.0 tok/s shows up as -10% to -37% energy per token, not -44%, and the pass-to-pass spread of the bf16 row (1.64 vs 2.37 J, package power 64.7 vs 92.8 W at nearly equal
+speed) is as large as the effect between the int8 row and the int4 + sparse row. The only comparison that exceeds the noise is CPU against GPU: H2 holds (0.38-0.50 J/token against 1.25-2.37,
+3.1x to 6.2x; the GPU rows include the 41-51 W package draw of the host thread that drives the graph). The cause of the pass-1 package-power outlier (64.7 W) is unknown;
+RAPL's 1 s resolution and 35-40 samples per window do not resolve it. Absolute CPU decode rates in this quiet session (30-57 tok/s) are higher than in the contended session of the
+phase summary above (24-33 tok/s): the memory-bandwidth ceiling moved (26 -> 38 GB/s), which is why only within-session comparisons are valid.
+
