@@ -24,7 +24,7 @@ public:
     bool forward(const int32_t* tokens, int n, float* logits, int logits_mode = 1);
     // Teacher-forced scoring: nll[i] = -log softmax(logits after tokens[i])[targets[i]] (targets[i] < 0 skips). The logits stay on
     // the device, so perplexity runs do not pay for a 128k-wide host transfer and softmax per token.
-    bool forward_nll(const int32_t* tokens, int n, const int32_t* targets, float* nll);
+    bool forward_nll(const int32_t* tokens, int n, const int32_t* targets, float* nll, int32_t* argmax = nullptr);
     // Greedy decode fast path: feed one token, return argmax of the next-token logits without copying them to the host.
     int32_t step_argmax(int32_t token);
     static constexpr int kMaxChunk = 64;

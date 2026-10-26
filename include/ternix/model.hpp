@@ -53,7 +53,7 @@ public:
     bool forward(const int32_t* tokens, int n, float* logits, int logits_mode = 1);
 
     // Teacher-forced scoring (see CudaModel::forward_nll): nll[i] for the logits after tokens[i] against targets[i].
-    bool forward_nll(const int32_t* tokens, int n, const int32_t* targets, float* nll);
+    bool forward_nll(const int32_t* tokens, int n, const int32_t* targets, float* nll, int32_t* argmax = nullptr);
 
     static constexpr int kMaxChunk = 64;   // tokens per internal forward chunk
 

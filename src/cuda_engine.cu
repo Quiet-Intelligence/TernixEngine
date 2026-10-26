@@ -345,8 +345,10 @@ __global__ void argmax_kernel(const float* __restrict__ logits, int V, int32_t* 
 }
 
 // nll[t] = logsumexp(logits[t]) - logits[t][target[t]]; one block per row.
-__global__ void nll_kernel(const float* __restrict__ logits, const int32_t* __restrict__ targets, int V, float* __restrict__ nll) {
+__global__ void nll_kernel(const float* __restrict__ logits, const int32_t* __restrict__ targets, int V, float* __restrict__ nll,
+                           int32_t* __restrict__ argmax_out) {
     __shared__ float red[32];
+    __shared__ int best;
     const size_t t = blockIdx.x;
     const float* l = logits + t * V;
     float mx = -INFINITY;
@@ -355,7 +357,15 @@ __global__ void nll_kernel(const float* __restrict__ logits, const int32_t* __re
     float sum = 0.f;
     for (int i = threadIdx.x; i < V; i += blockDim.x) sum += __expf(l[i] - mx);
     sum = block_sum(sum, red);
-    if (threadIdx.x == 0) nll[t] = targets[t] < 0 ? 0.f : (mx + __logf(sum)) - l[targets[t]];
+    if (threadIdx.x == 0) {
+        nll[t] = targets[t] < 0 ? 0.f : (mx + __logf(sum)) - l[targets[t]];
+        best = 0x7fffffff;
+    }
+    __syncthreads();
+    for (int i = threadIdx.x; i < V; i += blockDim.x)
+        if (l[i] == mx) atomicMin(&best, i);
+    __syncthreads();
+    if (threadIdx.x == 0) argmax_out[t] = best;
 }
 
 struct DevLinear {
@@ -564,23 +574,27 @@ bool CudaModel::forward(const int32_t* tokens, int n, float* logits, int mode) {
     return true;
 }
 
-bool CudaModel::forward_nll(const int32_t* tokens, int n, const int32_t* targets, float* nll) {
+bool CudaModel::forward_nll(const int32_t* tokens, int n, const int32_t* targets, float* nll, int32_t* argmax) {
     Impl& s = *p_;
     if (s.pos + n > s.max_ctx) return false;
     int32_t* d_t = nullptr;
     float* d_n = nullptr;
+    int32_t* d_a = nullptr;
     CK(cudaMalloc(&d_t, size_t(kMaxChunk) * 4));
     CK(cudaMalloc(&d_n, size_t(kMaxChunk) * 4));
+    CK(cudaMalloc(&d_a, size_t(kMaxChunk) * 4));
     for (int done = 0; done < n; done += kMaxChunk) {
         const int c = std::min(kMaxChunk, n - done);
         s.chunk(tokens + done, c, 2);
         CK(cudaMemcpy(d_t, targets + done, size_t(c) * 4, cudaMemcpyHostToDevice));
-        nll_kernel<<<c, 1024>>>(s.logits, d_t, static_cast<int>(s.cfg.vocab), d_n);
+        nll_kernel<<<c, 1024>>>(s.logits, d_t, static_cast<int>(s.cfg.vocab), d_n, d_a);
         CK(cudaGetLastError());
         CK(cudaMemcpy(nll + done, d_n, size_t(c) * 4, cudaMemcpyDeviceToHost));
+        if (argmax) CK(cudaMemcpy(argmax + done, d_a, size_t(c) * 4, cudaMemcpyDeviceToHost));
     }
     cudaFree(d_t);
     cudaFree(d_n);
+    cudaFree(d_a);
     return true;
 }
 

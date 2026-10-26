@@ -158,15 +158,38 @@ int run(M& model, const Tokenizer& tok, const Args& a) {
         return generate(model, tok, a.chat ? chat_prompt(a.prompt) : a.prompt, a);
     }
     if (a.cmd == "chat") {
-        std::fprintf(stderr, "BitNet chat (%s). Empty line or Ctrl-D quits.\n", backend_desc(model).c_str());
-        Args ga = a;
-        ga.n = 512;
-        if (ga.sampler.temperature == 0.f) { ga.sampler.temperature = 0.6f; ga.sampler.top_p = 0.9f; }
+        std::fprintf(stderr, "BitNet chat (%s), multi-turn with a shared KV cache. Empty line or Ctrl-D quits.\n", backend_desc(model).c_str());
+        SamplerConfig sc = a.sampler;
+        if (sc.temperature == 0.f) { sc.temperature = 0.6f; sc.top_p = 0.9f; }
+        Sampler sampler(sc);
+        std::vector<float> logits(cfg.vocab);
+        std::vector<int32_t> history;
+        model.reset();
         for (std::string line;;) {
             std::fprintf(stderr, "\n> ");
             if (!std::getline(std::cin, line) || line.empty()) break;
-            model.reset();   // single-turn context
-            generate(model, tok, chat_prompt(line), ga);
+            std::vector<int32_t> turn = tok.encode(chat_prompt(line), history.empty(), true);
+            if (static_cast<int>(history.size() + turn.size()) + 16 > model.max_ctx()) {
+                std::fprintf(stderr, "context full (%d tokens); starting a new conversation\n", model.max_ctx());
+                history.clear();
+                model.reset();
+                turn = tok.encode(chat_prompt(line), true, true);
+            }
+            history.insert(history.end(), turn.begin(), turn.end());
+            model.forward(turn.data(), static_cast<int>(turn.size()), logits.data(), 1);
+            Streamer out;
+            for (int i = 0; i < 512 && static_cast<int>(history.size()) + 1 < model.max_ctx(); ++i) {
+                const int32_t next = sampler.sample(logits.data(), cfg.vocab, history);
+                if (is_stop(cfg, next)) {
+                    history.push_back(static_cast<int32_t>(cfg.eot));   // the turn ends with <|eot_id|> in the context
+                    model.forward(&history.back(), 1, logits.data(), 0);
+                    break;
+                }
+                history.push_back(next);
+                out.feed(tok.token_bytes(next));
+                model.forward(&next, 1, logits.data(), 1);
+            }
+            std::printf("\n");
         }
         return 0;
     }

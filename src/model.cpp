@@ -252,7 +252,7 @@ bool Model::forward(const int32_t* tokens, int n, float* logits, int logits_mode
     return true;
 }
 
-bool Model::forward_nll(const int32_t* tokens, int n, const int32_t* targets, float* nll) {
+bool Model::forward_nll(const int32_t* tokens, int n, const int32_t* targets, float* nll, int32_t* argmax) {
     if (pos_ + n > max_ctx_) return false;
     const size_t V = cfg_.vocab;
     std::vector<float> logits(static_cast<size_t>(kMaxChunk) * V);
@@ -262,9 +262,12 @@ bool Model::forward_nll(const int32_t* tokens, int n, const int32_t* targets, fl
         pool_.parallel_for(static_cast<size_t>(c), [&](size_t t, int) {
             const float* l = logits.data() + t * V;
             float mx = l[0];
-            for (size_t v = 1; v < V; ++v) mx = std::max(mx, l[v]);
+            size_t am = 0;
+            for (size_t v = 1; v < V; ++v)
+                if (l[v] > mx) { mx = l[v]; am = v; }
             double z = 0;
             for (size_t v = 0; v < V; ++v) z += std::exp(l[v] - mx);
+            if (argmax) argmax[done + static_cast<int>(t)] = static_cast<int32_t>(am);
             const int32_t tg = targets[done + static_cast<int>(t)];
             nll[done + static_cast<int>(t)] = tg < 0 ? 0.f : static_cast<float>(std::log(z) + mx - l[tg]);
         });
