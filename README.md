@@ -132,6 +132,9 @@ auto-mode permission classifier denied building third-party code and executing d
 owner. The harness is ready (`bench/ternixbench.py`, `bench/COMPETITORS.md` lists the exact commands, official release hashes verified).
 Until those numbers exist, no claim of being faster than any other engine is made. The official Hugging Face PyTorch path is measured as
 a reference in the results above (it re-quantises the bf16 weights on every forward pass, as its model card warns; not an efficiency baseline).
+The implementations of bitnet.cpp, llama.cpp, T-MAC, vlut.cpp, Litespark-Inference and the PrismML llama.cpp fork were read at source level instead
+(`references/CODE.md`). Two findings limit what this engine can claim: the PrismML fork already has an int8 tensor-core prefill kernel and a multi-row
+decode kernel for group-128 ternary weights, so those techniques are not new here, and it is the correct comparator for architecture 2 (not yet run).
 
 ## Limitations and roadmap
 1. Two architectures: the BitNet b1.58 block (CPU + GPU) and a Qwen3-style group-scaled block (Ternary-Bonsai-1.7B; CPU: prefill ~125 tok/s,

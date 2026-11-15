@@ -41,6 +41,9 @@ AVX-VNNI `u8 x s8` and with dp4a, evaluated on this hardware).
 kernel of the 2B4T release are GEMV (S5, S16), Vec-LUT addresses prefill with LUTs on edge CPUs (S6). On NVIDIA hardware no
 open ternary engine uses int8 tensor cores for W1.58A8 prefill (S16 uses dp4a on CUDA cores; our baseline does too: 700 tok/s
 prefill **[measured]**). => Contribution C4.
+Correction (2026-11-15, source reading in `CODE.md`): this holds for the BitNet 2B4T runtimes only. The PrismML llama.cpp fork (commit 6447906) has an
+`mma.sync.m16n8k32` int8 prefill kernel for its group-128 ternary type on sm_90+, so tensor-core ternary prefill is not new as a technique; C4 is an
+engineering result for this engine (bit-exact, 2.6-3.1x over its own dp4a path), not a first.
 
 **G5. Hybrid cores and single-channel memory are not studied.** Published thread-scaling results (S1: peak at 4-5 threads;
 S3: PARLOOPER hybrid scheduling) use 2-channel desktops/servers. On this laptop the sequential-read ceiling is 26 GB/s with 16

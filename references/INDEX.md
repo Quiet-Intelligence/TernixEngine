@@ -5,7 +5,7 @@ Compiled 2026-10-26 by web search plus reading of primary sources. Foundation pa
 newer works are not redistributed in this repository (fetch them from the links; arXiv IDs given).
 
 **Verification level** (column "V"): P = primary text read (method, results and stated limitations), A = abstract and search
-snippets only, S = secondary source only (vendor page, news, blog). Numbers in the "Reported" column are the authors' own
+snippets only, S = secondary source only (vendor page, news, blog), C = source code read (findings in `CODE.md`; not built or run). Numbers in the "Reported" column are the authors' own
 claims and are not independently reproduced here unless an entry says so.
 
 Source-level reading of two competitor implementations (bitnet.cpp I2_S and GPU kernels, llama.cpp TQ2_0 and its CUDA coverage) is in `CODE.md`.
@@ -49,11 +49,11 @@ Source-level reading of two competitor implementations (bitnet.cpp I2_S and GPU 
 | ID | Work | Date / venue | Design | Reported | Stated limits / gaps (verified where V = P) | V |
 |---|---|---|---|---|---|---|
 | S1 | bitnet.cpp (Wang et al., MSR), arXiv 2502.11880, ACL'25; github.com/microsoft/BitNet | 2025-02 | I2_S (2-bit, MAD, per-tensor int8 activations, K%128), TL1 (g=2, 2 bpw), TL2 (g=3, 1.67 bpw, sign + 4-bit index, mirror), pshufb/tbl LUTs | I2_S 6.25x over FP16; TL2 up to 2.32x over T-MAC; lossless on bitnet_b1_58-large | ternary-only; prefill left to future work; ELUT unproven; embeddings/lm_head handling not described; one model for the lossless claim; README: 2026-01 parallel kernels + embedding quantisation (1.15-2.1x extra) | P |
-| S2 | T-MAC GitHub, microsoft/T-MAC | 2024-2025 | see F3; NPU extension (2025-05) | 2-4x over llama.cpp | baseline drift: numbers tied to llama.cpp b2794; T-MAC treats ternary as 2 one-bit planes | S |
+| S2 | T-MAC GitHub, microsoft/T-MAC | 2024-2025 | see F3; NPU extension (2025-05) | 2-4x over llama.cpp | baseline drift: numbers tied to llama.cpp b2794; T-MAC treats ternary as 2 one-bit planes | S, C |
 | S3 | Pushing the Envelope of LLM Inference on AI-PC and Intel GPUs (Georganas et al., Intel), arXiv 2508.06753 | 2025-08 | VNNI4-interleaved int2 microkernel (1 shift, 2 AND, 4 vpshufb), BRGEMM TPP + PARLOOPER hybrid scheduling, XeTLA int2 x BF16 GPU kernel | up to 2.2x over bitnet.cpp end-to-end; BMG (Arc B580) 365 tok/s 2B vs A100 250 | no accuracy evaluation (dummy weights); OpenMP fork/join overhead on small GEMVs; 1-bit gives no gain on LNL | P |
-| S4 | Litespark-Inference (Mindbeam), arXiv 2605.06485 | 2026-05 | ternary stored as int8 (556 MB), per-token int8 activations, zero-point correction with precomputed column sums, VNNI/SDOT, runtime dispatch | 39.9-41.2 tok/s on 2B4T on CPUs; 18-196x over PyTorch (not over bitnet.cpp) | weight memory 11% above 2-bit packing; threading not described; only BitNet architecture; no perplexity/task scores | P |
+| S4 | Litespark-Inference (Mindbeam), arXiv 2605.06485 | 2026-05 | ternary stored as int8 (556 MB), per-token int8 activations, zero-point correction with precomputed column sums, VNNI/SDOT, runtime dispatch | 39.9-41.2 tok/s on 2B4T on CPUs; 18-196x over PyTorch (not over bitnet.cpp) | weight memory 11% above 2-bit packing; threading not described; only BitNet architecture; no perplexity/task scores | P, C |
 | S5 | BITCOS, "Breaking the 1.58-bit Barrier for Ternary LLMs", arXiv 2609.16338 | 2026-09 | presence bitmap + compacted sign vector, 2-z bits/weight (1.485 on sparsest), fp16 scale per 128; AVX-512 (pdep), AVX2 (5-instr expansion + vpdpbssd), Xe2 (256-entry SLM LUT) | GEMV 1.14-1.28x over 2-bit; decode 1.10-1.18x CPU, 1.02-1.27x Xe2 | GEMV only (no prefill/GEMM); no NVIDIA/CUDA; slower on an instruction-bound 8-core client part (LNL); needs vpdpbssd (AVX-VNNI-INT8) on AVX2 so it cannot run on 13th/14th-gen Intel; no code released; lm_head not discussed | P |
-| S6 | Vec-LUT (Tsinghua AIR et al.), arXiv 2512.06443; vlut.cpp | 2025-12 | one LUT shared across parallel tokens, 1->N lookup, vector-LUT tensor layout | up to 4.2x for parallel (prefill) inference, 5 edge devices | edge CPUs; LUT cost < 1%; integrated in llama.cpp | A |
+| S6 | Vec-LUT (Tsinghua AIR et al.), arXiv 2512.06443; vlut.cpp | 2025-12 | one LUT shared across parallel tokens, 1->N lookup, vector-LUT tensor layout | up to 4.2x for parallel (prefill) inference, 5 edge devices | edge CPUs; LUT cost < 1%; integrated in llama.cpp | A, C |
 | S7 | T-SAR (Oh et al.), arXiv 2511.13676, DATE'26 | 2025-11 | LUTs generated inside the SIMD register file | 5.6-24.5x GEMM, 1.1-86.2x GEMV (simulation); LUT accesses >75% of memory requests in T-MAC/bitnet.cpp | simulation-based; prefill measured at N=128 only | A |
 | S8 | Unified LUT inference with signed-digit K/V caches (Duan et al.), arXiv 2608.03229 | 2026-08 | K/V stored as multi-plane signed digits read by activation LUTs, shared datapath for projections and attention | see paper | hardware-oriented | A |
 | S9 | LUT Tensor Core (MSR), arXiv 2408.06003 | 2024-08 | software-hardware co-design for LUT mpGEMM | >10x compute density/energy (simulation) | needs new hardware | A |
@@ -65,7 +65,7 @@ Source-level reading of two competitor implementations (bitnet.cpp I2_S and GPU 
 | S15 | llama.cpp TQ1_0 (1.69 bpw, 5 trits/byte) and TQ2_0 (2.06 bpw), PR #8151 | 2024 | per-256 block scales; CUDA support not confirmed in this survey | TQ1_0 1.66x slower than Q2_0 on ARL (from S5) | blocks of 256 not lossless vs per-tensor training | A |
 | S16 | BitNet GPU kernel, microsoft/BitNet gpu/ (2025-05) | 2025-05 | W2A8 GEMV, dp4a, CUDA cores, 4 trits per int8 | per 2B4T report | GEMV only, CUDA cores not tensor cores | S |
 | S17 | Ladder (OSDI'23) / BitBLAS | 2023 | tensor-compiler data-type support incl. int2 | used for the original b1.58 latency numbers | | S |
-| S18 | PrismML llama.cpp fork and upstream Q2_0 (group 64) | 2026 | PQ2_0 (type 142, group 128), PTQ1_0 (type 143, dense trits), Hadamard activation runtime for Bonsai 2 | CUDA, Metal, Vulkan, ROCm, SYCL | formats not yet upstream | S |
+| S18 | PrismML llama.cpp fork and upstream Q2_0 (group 64) | 2026 | PQ2_0 (type 142, group 128), PTQ1_0 (type 143, dense trits), Hadamard activation runtime for Bonsai 2 | CUDA, Metal, Vulkan, ROCm, SYCL | formats not yet upstream | S, C |
 | S19 | Prism/Bonsai MLX 2-bit packs (mlx-vlm >= 0.7.8) | 2026 | Apple Silicon path | 310 tok/s 2B on M5 Max (vendor) | | S |
 
 ## 4. Adjacent techniques used or considered
