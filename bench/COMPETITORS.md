@@ -60,3 +60,9 @@ ternary weights) and keep the TQ2_0 CUDA log (`llamacpp_cuda_tq2_0.log`) as evid
 T-MAC's documented BitNet model is `bitnet_b1_58-3B` (not 2B4T), it needs TVM built from source with Python 3.8, Clang 17 and Visual Studio on Windows, and its authors state that a
 speed-up is not guaranteed on x86. A same-model row is therefore not possible without porting one side; keep T-MAC as a literature comparison only. Details: `references/CODE.md`.
 
+## Further comparators found by source reading (2026-11-15)
+
+* Architecture 2 (Ternary-Bonsai-1.7B): the PrismML llama.cpp fork (`PrismML-Eng/llama.cpp`, branch `prism`) with the `*-PQ2_0.gguf` file is the vendor runtime, with CUDA decode and
+  tensor-core prefill kernels for that format. Run `llama-bench -p 128 -n 64 -r 7` on CPU (`-t 16`) and CUDA (`-ngl 99`) and store the JSON as `docs/research/data/competitors/prism_*.json`.
+* CPU prefill: vlut.cpp (`OpenBitSys/vlut.cpp`), types I2_V / I1_V, needs its own conversion (`convert_hf_to_gguf_vlut.py`) and a build; compare at pp128 with the same thread count.
+* Both are builds or downloaded binaries of third-party code and are left to the repository owner, like sections 1 and 2.
