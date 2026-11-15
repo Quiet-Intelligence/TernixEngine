@@ -5,6 +5,10 @@
 $ErrorActionPreference = "Stop"
 # native commands do not honour $ErrorActionPreference: stop at the first non-zero exit code instead of benchmarking a missing file
 function Run { param([string]$exe, [string[]]$a) & $exe @a; if ($LASTEXITCODE -ne 0) { throw "failed (exit $LASTEXITCODE): $exe $($a -join ' ')" } }
+# like Run, but stdout/stderr go to log files (the console overwrote the converter's traceback with progress lines); on failure the stderr tail is printed
+function RunLogged { param([string]$exe, [string[]]$a, [string]$log)
+  $p = Start-Process -FilePath $exe -ArgumentList $a -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$log.out" -RedirectStandardError "$log.err"
+  if ($p.ExitCode -ne 0) { Get-Content "$log.err" -Tail 40; throw "failed (exit $($p.ExitCode)), full log: $log.err" } }
 $root = "C:\PROFESSIONAL\Development\AI-HPC"
 $comp = "$root\ternix-competitors"
 $out  = "$root\TernixEngine\docs\research\data\competitors"
@@ -32,7 +36,7 @@ Run "uv" @("pip", "install", "--python", $py, "gguf", "sentencepiece")
 $bn = "$comp/llama.cpp/conversion/bitnet.py"
 (Get-Content $bn -Raw) -replace 'self\._set_vocab_sentencepiece\(\)', 'self._set_vocab_gpt2()' | Set-Content $bn -NoNewline
 & git -C "$comp\llama.cpp" diff | Out-File -Encoding utf8 "$out\converter_patch.diff"
-Run $py @("$comp\llama.cpp\convert_hf_to_gguf.py", "$root\TernixEngine\models\bitnet-b1.58-2B-4T-bf16", "--outfile", "$comp\bitnet2b4t-f16.gguf", "--outtype", "f16")
+RunLogged $py @("$comp\llama.cpp\convert_hf_to_gguf.py", "$root\TernixEngine\models\bitnet-b1.58-2B-4T-bf16", "--outfile", "$comp\bitnet2b4t-f16.gguf", "--outtype", "f16") "$out\convert"
 # TQ2_0 / TQ1_0 are the ternary types. The ggml CUDA backend at this commit has no TQ2_0/TQ1_0 kernels (no reference under ggml/src/ggml-cuda; only Vulkan has them), so
 # a CUDA run of those two is only a check of what llama.cpp does with them; the GPU comparators are Q2_K (2.6 bpw) and Q4_0 (4.5 bpw), which CUDA supports. They are
 # NOT lossless for ternary weights; they are the closest supported formats and are reported with their bits per weight.
